@@ -3,6 +3,7 @@
 // the background event page over a runtime Port.
 
 import { groupMovesByFolder } from "../core/classifier.js";
+import { log } from "../core/log.js";
 import {
   PORT_NAME,
   type BgEvent,
@@ -351,7 +352,14 @@ function wireEvents(): void {
     if (!res.ok && "error" in res) setError(res.error);
   });
 
-  el.abort.addEventListener("click", () => void send({ type: "abort" }));
+  el.abort.addEventListener("click", () => {
+    // Reconnect first: if the background suspended mid-run the port is dead, and
+    // we want the resulting state (idle + resume) to stream back rather than the
+    // click being a silent no-op against a respawned, job-less page.
+    ensurePort();
+    void send({ type: "abort" });
+    void refreshState();
+  });
 
   // Picking a preset fills the instruction and targets it for save/delete.
   el.presetSelect.addEventListener("change", () => {
@@ -479,10 +487,42 @@ function applyStateEvent(incoming: JobState): void {
 }
 
 let port: browser.runtime.Port | null = null;
+/** Guards against scheduling more than one recovery reconnect at a time. */
+let recovering = false;
+
+/** Pull the authoritative job state from the background and render it. */
+async function refreshState(): Promise<void> {
+  const res = await send({ type: "getState" });
+  if (res.ok && "state" in res) applyStateEvent(res.state);
+}
+
+/**
+ * The port dropped. If we were mid-job, this is very likely the event page
+ * suspending and taking the run down with it (the in-memory job is gone, but its
+ * checkpoint survives). Do ONE delayed reconnect + state pull: the getState wakes
+ * a fresh page, which — after its init loads the checkpoint — reports idle with a
+ * resumable run, so the UI drops the forever-spinner and shows "Resume" instead
+ * of leaving the user staring at a dead progress bar. A single shot (not a timer
+ * loop) avoids the "closed conduit" storm a naive auto-reconnect would cause.
+ */
+function recoverFromDisconnect(): void {
+  const busy = lastState?.phase === "classifying" || lastState?.phase === "applying";
+  if (!busy || recovering) return;
+  recovering = true;
+  setTimeout(() => {
+    recovering = false;
+    log("UI: recovering after mid-job port loss");
+    ensurePort();
+    void refreshState();
+  }, 800);
+}
 
 function handlePortMessage(message: unknown): void {
   const event = message as BgEvent;
-  if (event.type === "state") applyStateEvent(event.state);
+  if (event.type === "state") {
+    log("UI: state ←", event.state.phase);
+    applyStateEvent(event.state);
+  }
   else if (event.type === "progress" && lastState) {
     lastState.progress = event.progress;
     // A resolved message clears any retry note shown while it was in flight.
@@ -505,21 +545,23 @@ function handlePortMessage(message: unknown): void {
  */
 function ensurePort(): void {
   if (port) return;
+  log("UI: opening port");
   const p = messenger.runtime.connect({ name: PORT_NAME });
   p.onMessage.addListener(handlePortMessage);
   p.onDisconnect.addListener(() => {
     if (port === p) port = null;
+    log("UI: port disconnected", { phase: lastState?.phase ?? null });
+    recoverFromDisconnect();
   });
   port = p;
 }
 
 async function init(): Promise<void> {
+  log("UI: app loaded");
   wireEvents();
   await Promise.all([loadFolders(), loadPresets()]);
   ensurePort();
-
-  const res = await send({ type: "getState" });
-  if (res.ok && "state" in res) applyStateEvent(res.state);
+  await refreshState();
 }
 
 void init();
