@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-19
+
+### Fixed
+- Folder picker could be completely empty (regression in 0.2.3). Folder
+  enumeration now tries multiple `getSubFolders` argument shapes, degrades to
+  the account's inline folders, and finally exposes the root folder itself, so
+  the picker is never silently empty. Diagnostic warnings are logged if no
+  folders are found.
+
 ## [0.2.3] - 2026-06-19
 
 ### Fixed
@@ -71,7 +80,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...v0.2.1
