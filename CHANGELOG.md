@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-19
+
+### Added
+- **Batched classification.** A new *Emails per request* (batch size) setting
+  lets the model classify several emails in one LLM request instead of one
+  request per email. On large folders this cuts round-trips and amortises the
+  repeated prompt prefill, which is the main fix for slow runs on local models.
+  Defaults to `1` (unchanged per-message behaviour); raise it (≈10–20 is a good
+  start) when your model returns reliable JSON. The model returns one result
+  per email keyed by id, so any email it reorders or omits safely defaults to
+  "keep" for review.
+- **Stop & review.** The classify button's companion (formerly "Stop") now
+  reads *Stop & review* and reliably drops you into the review screen with
+  everything classified so far — nothing is moved. The review header and the
+  exported report note when a run was stopped early ("Stopped early — N of ~M
+  classified").
+
 ## [0.2.5] - 2026-06-19
 
 ### Fixed
@@ -94,7 +111,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...v0.2.3

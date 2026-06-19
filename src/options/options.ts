@@ -32,6 +32,7 @@ function readForm(): Settings {
     timeoutMs: Number($("timeoutMs").value),
     maxBodyChars: Number($("maxBodyChars").value),
     concurrency: Number($("concurrency").value),
+    batchSize: Number($("batchSize").value),
   };
 }
 
@@ -43,6 +44,7 @@ function writeForm(s: Settings): void {
   $("timeoutMs").value = String(s.timeoutMs);
   $("maxBodyChars").value = String(s.maxBodyChars);
   $("concurrency").value = String(s.concurrency);
+  $("batchSize").value = String(s.batchSize);
 }
 
 /**

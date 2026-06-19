@@ -2,9 +2,12 @@
 // brokers requests/progress between the UI tab and the platform + LLM layers.
 
 import { runClassification } from "../core/classifier.js";
-import { parseDecision } from "../core/decisionParser.js";
+import { parseDecision, parseDecisions } from "../core/decisionParser.js";
 import { chatCompletion } from "../core/llmClient.js";
-import { buildClassificationMessages } from "../core/promptBuilder.js";
+import {
+  buildBatchClassificationMessages,
+  buildClassificationMessages,
+} from "../core/promptBuilder.js";
 import {
   PORT_NAME,
   type BgEvent,
@@ -25,6 +28,7 @@ const state: JobState = {
   progress: null,
   results: [],
   error: null,
+  stopped: false,
 };
 
 let abortController: AbortController | null = null;
@@ -140,10 +144,12 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
   state.instruction = instruction;
   state.results = [];
   state.error = null;
+  state.stopped = false;
   state.progress = { processed: 0, total: null };
   pushState();
 
   abortController = new AbortController();
+  const { signal } = abortController;
   const settings = await loadSettings();
   const nodes = await listFolderTree();
   const { allowedPaths } = toFolderIndex(nodes);
@@ -159,23 +165,56 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     const messages = buildClassificationMessages(instruction, folderRefs, summary);
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
-      signal: abortController?.signal,
+      signal,
     });
     return parseDecision(raw, allowedPaths);
+  };
+
+  // Batched path: classify several emails per LLM request, then map the keyed
+  // results back to the input order (any omitted email defaults to "keep").
+  const classifyBatch = async (
+    summaries: MessageSummary[],
+  ): Promise<Decision[]> => {
+    const messages = buildBatchClassificationMessages(
+      instruction,
+      folderRefs,
+      summaries,
+    );
+    const raw = await chatCompletion(settings, messages, fetch, {
+      jsonMode: true,
+      signal,
+    });
+    const byId = parseDecisions(
+      raw,
+      allowedPaths,
+      summaries.map((s) => s.id),
+    );
+    return summaries.map(
+      (s) =>
+        byId.get(s.id) ?? {
+          action: "keep",
+          folder: null,
+          reason: "model omitted a decision for this email",
+          confidence: 0,
+        },
+    );
   };
 
   try {
     const results = await runClassification({
       source: summarise(sourceFolderId, settings.maxBodyChars),
       classify,
+      classifyBatch,
       concurrency: settings.concurrency,
-      signal: abortController.signal,
+      batchSize: settings.batchSize,
+      signal,
       onProgress: (progress) => {
         state.progress = progress;
         broadcast({ type: "progress", progress });
       },
     });
     state.results = results;
+    state.stopped = signal.aborted;
     state.phase = "review";
   } catch (err) {
     state.error = (err as Error).message;

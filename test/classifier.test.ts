@@ -83,6 +83,83 @@ describe("runClassification", () => {
   });
 });
 
+describe("runClassification (batched)", () => {
+  it("groups the source into batches of batchSize and preserves order", async () => {
+    const calls: number[][] = [];
+    const results = await runClassification({
+      source: stream([1, 2, 3, 4, 5]),
+      classifyBatch: async (summaries) => {
+        calls.push(summaries.map((s) => s.id));
+        return summaries.map((s) => (s.id % 2 === 0 ? keep : move("X")));
+      },
+      concurrency: 1,
+      batchSize: 2,
+    });
+    expect(calls).toEqual([[1, 2], [3, 4], [5]]);
+    expect(results.map((r) => r.summary.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(results[1].decision.action).toBe("keep");
+    expect(results[0].decision.action).toBe("move");
+  });
+
+  it("defaults missing entries in a short batch result to keep", async () => {
+    const results = await runClassification({
+      source: stream([1, 2, 3]),
+      // Model only returned one decision for a 3-message batch.
+      classifyBatch: async () => [move("X")],
+      concurrency: 1,
+      batchSize: 3,
+    });
+    expect(results[0].decision.action).toBe("move");
+    expect(results[1].decision.action).toBe("keep");
+    expect(results[2].decision.action).toBe("keep");
+    expect(results[2].decision.reason).toContain("omitted");
+  });
+
+  it("marks an entire batch as kept-with-error when classifyBatch throws", async () => {
+    const results = await runClassification({
+      source: stream([1, 2]),
+      classifyBatch: async () => {
+        throw new Error("batch boom");
+      },
+      concurrency: 1,
+      batchSize: 2,
+    });
+    expect(results.every((r) => r.error === "batch boom")).toBe(true);
+    expect(results.every((r) => r.decision.action === "keep")).toBe(true);
+  });
+
+  it("reports progress per message even when batched", async () => {
+    const onProgress = vi.fn();
+    await runClassification({
+      source: stream([1, 2, 3, 4]),
+      classifyBatch: async (summaries) => summaries.map(() => keep),
+      concurrency: 1,
+      batchSize: 2,
+      total: 4,
+      onProgress,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(4);
+    expect(onProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ processed: 4, total: 4 }),
+    );
+  });
+
+  it("prefers single classify when batchSize is 1 even if classifyBatch exists", async () => {
+    const classifyBatch = vi.fn(async (summaries: MessageSummary[]) =>
+      summaries.map(() => keep),
+    );
+    const results = await runClassification({
+      source: stream([1, 2]),
+      classify: async () => move("X"),
+      classifyBatch,
+      concurrency: 1,
+      batchSize: 1,
+    });
+    expect(classifyBatch).not.toHaveBeenCalled();
+    expect(results.every((r) => r.decision.action === "move")).toBe(true);
+  });
+});
+
 describe("groupMovesByFolder", () => {
   it("groups only move decisions by target folder", async () => {
     const results = await runClassification({

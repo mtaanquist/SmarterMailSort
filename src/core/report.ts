@@ -8,6 +8,8 @@ export interface ReportMeta {
   sourceFolder: string;
   instruction: string;
   dryRun: boolean;
+  /** True when classification was stopped early by the user. */
+  stopped?: boolean;
   generatedAt: string;
 }
 
@@ -27,6 +29,11 @@ export function buildMarkdownReport(
   lines.push(`- Mode: ${meta.dryRun ? "dry-run (no changes applied)" : "applied"}`);
   lines.push(`- Source folder: ${meta.sourceFolder}`);
   lines.push(`- Instruction: ${meta.instruction}`);
+  if (meta.stopped) {
+    lines.push(
+      `- **Stopped early**: classification was halted by the user; this covers only the messages processed so far.`,
+    );
+  }
   lines.push("");
   lines.push(`## Summary`);
   lines.push("");

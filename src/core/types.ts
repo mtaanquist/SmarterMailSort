@@ -21,6 +21,12 @@ export interface Settings extends LlmConfig {
   maxBodyChars: number;
   /** How many messages to classify in parallel. 1 == strictly serial. */
   concurrency: number;
+  /**
+   * How many messages to classify per LLM request. 1 == one request per
+   * message (legacy behaviour). Larger values amortise prompt prefill and cut
+   * round-trips, at the cost of a longer per-request response.
+   */
+  batchSize: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +37,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timeoutMs: 60000,
   maxBodyChars: 2000,
   concurrency: 1,
+  batchSize: 1,
 };
 
 /** A compact, model-friendly summary of a single message. */

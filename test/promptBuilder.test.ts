@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildClassificationMessages, SYSTEM_PROMPT } from "../src/core/promptBuilder.js";
+import {
+  BATCH_SYSTEM_PROMPT,
+  buildBatchClassificationMessages,
+  buildClassificationMessages,
+  SYSTEM_PROMPT,
+} from "../src/core/promptBuilder.js";
 import type { FolderRef, MessageSummary } from "../src/core/types.js";
 
 const folders: FolderRef[] = [
@@ -41,5 +46,32 @@ describe("buildClassificationMessages", () => {
   it("handles an empty folder list", () => {
     const m = buildClassificationMessages("x", [], summary);
     expect(m[1].content).toContain("(no destination folders available)");
+  });
+});
+
+describe("buildBatchClassificationMessages", () => {
+  const second: MessageSummary = { ...summary, id: 2, subject: "Invoice" };
+  const messages = buildBatchClassificationMessages(
+    "sort my mail",
+    folders,
+    [summary, second],
+  );
+
+  it("uses the batch system prompt and a single user message", () => {
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toEqual({ role: "system", content: BATCH_SYSTEM_PROMPT });
+    expect(messages[1].role).toBe("user");
+  });
+
+  it("labels each email with its id and enumerates the folders once", () => {
+    const user = messages[1].content;
+    expect(user).toContain("sort my mail");
+    expect(user).toContain("Email id: 1");
+    expect(user).toContain("Email id: 2");
+    expect(user).toContain("Subject: Sale!");
+    expect(user).toContain("Subject: Invoice");
+    expect(user).toContain("- Local Folders/archive");
+    // Folder list rendered once, not per-email.
+    expect(user.match(/- Local Folders\/archive/g)).toHaveLength(1);
   });
 });

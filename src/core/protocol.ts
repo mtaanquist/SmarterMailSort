@@ -30,6 +30,8 @@ export interface JobState {
   progress: ClassifyProgress | null;
   results: ClassifiedMessage[];
   error: string | null;
+  /** True when the last classification run was stopped early by the user. */
+  stopped: boolean;
 }
 
 /** Push events the background sends to a connected UI port. */

@@ -6,9 +6,9 @@ instructions — e.g. _"move items that are newsletters or notifications into th
 `to_be_deleted` folder"_.
 
 It is designed to be **safe on huge folders**: messages are streamed and
-classified one at a time (configurable concurrency, serial by default), the
-model only ever sees a compact summary of each email, and **nothing is moved
-until you review and approve** the proposed changes.
+classified in configurable batches (and at configurable concurrency, serial by
+default), the model only ever sees a compact summary of each email, and
+**nothing is moved until you review and approve** the proposed changes.
 
 ## How it works
 
@@ -21,7 +21,8 @@ until you review and approve** the proposed changes.
 3. **Classify** — the extension pages through the folder, builds a small summary
    per message (from/to, subject, a few headers, first _N_ body characters) and
    asks the model whether to keep it or move it to one of your **existing**
-   folders. Progress is shown live.
+   folders. Progress is shown live, and you can **Stop & review** at any point
+   to work with whatever has been classified so far (nothing is moved).
 4. **Review** — proposed moves are grouped by destination folder with the
    model's reason and confidence. Deselect anything you disagree with.
 5. **Apply** (or **dry-run**) — apply the selected moves, or download a
@@ -58,6 +59,7 @@ Open the extension's settings (the **Settings** link in the tab, or
 | Temperature | `0` recommended for consistent classification. |
 | Max body characters | How much body text the model sees per email. |
 | Concurrency | `1` (serial) recommended for local models. |
+| Emails per request | Batch size — classify several emails per LLM request. `1` keeps one request per email; higher values (≈10–20) are much faster on large folders if your model returns reliable JSON. |
 
 Use **Test connection** to verify the endpoint before running a job.
 

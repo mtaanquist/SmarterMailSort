@@ -59,6 +59,18 @@
           <p class="hint">
             Keep this at 1 for local models to avoid oversaturating the endpoint.
           </p>
+
+          <label>
+            Emails per request (batch size)
+            <input id="batchSize" type="number" min="1" max="50" step="1" value="1" />
+          </label>
+          <p class="hint">
+            Classify several emails in a single LLM request. Higher values cut
+            round-trips and prompt overhead — a big speed-up on large folders —
+            but need a model that reliably returns well-formed JSON. Start
+            around 10–20 and lower it if results degrade. 1 = one request per
+            email.
+          </p>
         </fieldset>
 
         <div class="actions">

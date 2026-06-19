@@ -48,4 +48,17 @@ describe("buildMarkdownReport", () => {
   it("notes dry-run mode", () => {
     expect(md).toContain("dry-run");
   });
+
+  it("notes when the run was stopped early", () => {
+    const stopped = buildMarkdownReport(classified, {
+      sourceFolder: "Inbox",
+      instruction: "sort it",
+      dryRun: true,
+      stopped: true,
+      generatedAt: "2026-06-19T00:00:00.000Z",
+    });
+    expect(stopped).toContain("Stopped early");
+    // Absent by default.
+    expect(md).not.toContain("Stopped early");
+  });
 });
