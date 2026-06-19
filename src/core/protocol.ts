@@ -68,7 +68,8 @@ export interface JobNotice {
 export type BgEvent =
   | { type: "state"; state: JobState }
   | { type: "progress"; progress: ClassifyProgress }
-  | { type: "notice"; notice: JobNotice };
+  | { type: "notice"; notice: JobNotice }
+  | { type: "preselectFolder"; folderId: string };
 
 export const PORT_NAME = "smartermailsort";
 

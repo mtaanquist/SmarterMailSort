@@ -86,11 +86,16 @@ async function loadFolders(): Promise<void> {
       el.folder.appendChild(option);
     }
     // Preselect the folder passed via ?folder= (set when launched from the
-    // folder-pane context menu).
+    // folder-pane context menu on a fresh tab).
     const requested = new URLSearchParams(location.search).get("folder");
-    if (requested && folders.some((f) => f.id === requested)) {
-      el.folder.value = requested;
-    }
+    if (requested) preselectFolder(requested);
+  }
+}
+
+/** Select `folderId` in the source dropdown if it's a folder we know about. */
+function preselectFolder(folderId: string): void {
+  if (folders.some((f) => f.id === folderId)) {
+    el.folder.value = folderId;
   }
 }
 
@@ -483,6 +488,9 @@ function handlePortMessage(message: unknown): void {
     renderProgress(lastState);
   } else if (event.type === "notice") {
     setNote(event.notice.message);
+  } else if (event.type === "preselectFolder") {
+    // Sent when launched from the folder menu onto an already-open tab.
+    preselectFolder(event.folderId);
   }
 }
 
