@@ -24,7 +24,9 @@ default), the model only ever sees a compact summary of each email, and
    folders. Progress is shown live, and you can **Stop & review** at any point
    to work with whatever has been classified so far (nothing is moved).
 4. **Review** — proposed moves are grouped by destination folder with the
-   model's reason and confidence. Deselect anything you disagree with.
+   model's reason and confidence. Deselect anything you disagree with, or use
+   the **Select all/none** (global and per-folder) and **minimum-confidence
+   slider** to triage large result sets quickly.
 5. **Apply** (or **dry-run**) — apply the selected moves, or download a
    human-readable Markdown report without changing anything.
 
