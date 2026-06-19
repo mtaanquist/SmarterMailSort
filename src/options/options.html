@@ -44,6 +44,22 @@
           </label>
 
           <label>
+            JSON response format
+            <select id="responseFormat">
+              <option value="auto">Auto (detect what the endpoint supports)</option>
+              <option value="json_object">json_object (OpenAI, Ollama)</option>
+              <option value="json_schema">json_schema (LM Studio)</option>
+              <option value="text">Plain text (no enforcement)</option>
+            </select>
+          </label>
+          <p class="hint">
+            How the model is asked to return JSON. "Auto" tries json_object, then
+            json_schema, then plain text, and remembers what your endpoint
+            accepts — leave it on Auto unless you know your endpoint needs a
+            specific mode.
+          </p>
+
+          <label>
             Max retries on transient failure
             <input id="maxRetries" type="number" min="0" max="10" step="1" value="3" />
           </label>

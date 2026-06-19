@@ -3,10 +3,28 @@
 // extension APIs: it only needs a `fetch` implementation, which is injected so
 // tests can run without network access.
 
-import type { LlmConfig } from "./types.js";
-import type { ChatMessage } from "./promptBuilder.js";
+import type { LlmConfig, ResponseFormat } from "./types.js";
+import type { ChatMessage, NamedSchema } from "./promptBuilder.js";
 
 export type FetchLike = typeof fetch;
+
+/** A concrete response_format the wire request can carry (never "auto"). */
+type FormatMode = "json_object" | "json_schema" | "text";
+
+/** Order "auto" tries formats in. `text` (no enforcement) always works last. */
+const AUTO_ORDER: FormatMode[] = ["json_object", "json_schema", "text"];
+
+/**
+ * Remembers, per endpoint, which response_format the server accepted, so once
+ * "auto" has negotiated a working mode we don't re-pay the rejected attempt on
+ * every subsequent message. Session-scoped; cleared by tests.
+ */
+const formatMemo = new Map<string, FormatMode>();
+
+/** Clear the negotiated-format cache (used by tests). */
+export function clearResponseFormatCache(): void {
+  formatMemo.clear();
+}
 
 export class LlmError extends Error {
   readonly status?: number;
@@ -95,6 +113,51 @@ export interface ChatOptions {
   onRetry?: (info: RetryInfo) => void;
   /** Injectable sleep, primarily so tests can run without real delays. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Schema for the `json_schema` response_format (required to use that mode). */
+  jsonSchema?: NamedSchema;
+}
+
+/** Resolve the ordered list of response_format modes to try for a request. */
+function candidateModes(
+  responseFormat: ResponseFormat,
+  options: ChatOptions,
+  memoKey: string,
+): FormatMode[] {
+  if (!options.jsonMode) return ["text"]; // caller didn't ask for JSON enforcement
+  // json_schema is only usable when the caller supplied a schema.
+  const usable = (m: FormatMode): boolean => m !== "json_schema" || !!options.jsonSchema;
+  if (responseFormat !== "auto") {
+    return usable(responseFormat) ? [responseFormat] : ["text"];
+  }
+  const remembered = formatMemo.get(memoKey);
+  const order = remembered
+    ? [remembered, ...AUTO_ORDER.filter((m) => m !== remembered)]
+    : AUTO_ORDER;
+  return order.filter(usable);
+}
+
+/** Build the `response_format` body field for a given mode (undefined = omit). */
+function buildResponseFormat(
+  mode: FormatMode,
+  schema: NamedSchema | undefined,
+): Record<string, unknown> | undefined {
+  if (mode === "json_object") return { type: "json_object" };
+  if (mode === "json_schema" && schema) {
+    return {
+      type: "json_schema",
+      json_schema: { name: schema.name, schema: schema.schema, strict: true },
+    };
+  }
+  return undefined; // "text": rely on the prompt's JSON instructions
+}
+
+/** A 400 specifically complaining about response_format — worth trying another mode. */
+function isUnsupportedFormat(err: unknown): boolean {
+  return (
+    err instanceof LlmError &&
+    err.status === 400 &&
+    /response_format/i.test(err.message)
+  );
 }
 
 /**
@@ -128,12 +191,13 @@ async function withRetry<T>(
   }
 }
 
-/** A single, un-retried chat completion attempt. */
+/** A single, un-retried chat completion attempt using a specific format mode. */
 async function chatCompletionOnce(
   config: LlmConfig,
   messages: ChatMessage[],
   fetchImpl: FetchLike,
   options: ChatOptions,
+  mode: FormatMode,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -148,9 +212,8 @@ async function chatCompletionOnce(
     messages,
     stream: false,
   };
-  if (options.jsonMode) {
-    body.response_format = { type: "json_object" };
-  }
+  const responseFormat = buildResponseFormat(mode, options.jsonSchema);
+  if (responseFormat) body.response_format = responseFormat;
 
   let response: Response;
   try {
@@ -207,10 +270,14 @@ async function chatCompletionOnce(
 }
 
 /**
- * Send a chat completion request and return the assistant's text content,
- * retrying transient failures (network errors, timeouts, 5xx and 429) with
- * exponential backoff. Throws {@link LlmError} once retries are exhausted, on a
- * non-retryable error, or on a malformed payload.
+ * Send a chat completion request and return the assistant's text content.
+ *
+ * Two layers of resilience: transient failures (network, timeout, 5xx, 429) are
+ * retried with exponential backoff; and when the endpoint rejects the JSON
+ * `response_format` with a 400 (e.g. LM Studio refusing `json_object`), "auto"
+ * mode steps to the next supported format (json_object → json_schema → text) and
+ * remembers what worked for the endpoint. Throws {@link LlmError} once options
+ * are exhausted, on any other non-retryable error, or on a malformed payload.
  */
 export async function chatCompletion(
   config: LlmConfig,
@@ -218,13 +285,34 @@ export async function chatCompletion(
   fetchImpl: FetchLike,
   options: ChatOptions = {},
 ): Promise<string> {
-  return withRetry(() => chatCompletionOnce(config, messages, fetchImpl, options), {
-    maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
-    retryBaseMs: options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS,
-    signal: options.signal,
-    onRetry: options.onRetry,
-    sleep: options.sleep,
-  });
+  const memoKey = config.baseUrl;
+  const modes = candidateModes(config.responseFormat, options, memoKey);
+  const negotiating = config.responseFormat === "auto";
+
+  let lastError: unknown;
+  for (let i = 0; i < modes.length; i++) {
+    const mode = modes[i];
+    try {
+      const result = await withRetry(
+        () => chatCompletionOnce(config, messages, fetchImpl, options, mode),
+        {
+          maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
+          retryBaseMs: options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS,
+          signal: options.signal,
+          onRetry: options.onRetry,
+          sleep: options.sleep,
+        },
+      );
+      if (negotiating) formatMemo.set(memoKey, mode);
+      return result;
+    } catch (err) {
+      lastError = err;
+      // Only "auto" negotiates; only an unsupported-format 400 falls through.
+      if (negotiating && isUnsupportedFormat(err) && i < modes.length - 1) continue;
+      throw err;
+    }
+  }
+  throw lastError;
 }
 
 /** Lightweight connectivity probe used by the options "Test connection" button. */

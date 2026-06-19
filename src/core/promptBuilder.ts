@@ -23,6 +23,51 @@ export const SYSTEM_PROMPT = [
   "- If you are unsure, prefer keep.",
 ].join("\n");
 
+/** A named JSON Schema for endpoints that enforce `response_format: json_schema`. */
+export interface NamedSchema {
+  name: string;
+  schema: Record<string, unknown>;
+}
+
+const DECISION_PROPS = {
+  action: { type: "string", enum: ["move", "keep"] },
+  folder: { type: ["string", "null"] },
+  reason: { type: "string" },
+  confidence: { type: "number" },
+} as const;
+
+/** Schema matching the single-decision shape in {@link SYSTEM_PROMPT}. */
+export const DECISION_SCHEMA: NamedSchema = {
+  name: "email_decision",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["action", "folder", "reason", "confidence"],
+    properties: DECISION_PROPS,
+  },
+};
+
+/** Schema matching the batched-decision shape in {@link BATCH_SYSTEM_PROMPT}. */
+export const BATCH_DECISION_SCHEMA: NamedSchema = {
+  name: "email_decisions",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "action", "folder", "reason", "confidence"],
+          properties: { id: { type: "number" }, ...DECISION_PROPS },
+        },
+      },
+    },
+  },
+};
+
 function renderFolders(folders: FolderRef[]): string {
   if (!folders.length) return "(no destination folders available)";
   return folders.map((f) => `- ${f.path}`).join("\n");

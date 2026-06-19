@@ -4,7 +4,7 @@
 
 import { originMatchPattern } from "../core/endpoint.js";
 import type { UiRequest, UiResponse } from "../core/protocol.js";
-import type { Settings } from "../core/types.js";
+import type { ResponseFormat, Settings } from "../core/types.js";
 
 function $(id: string): HTMLInputElement {
   const el = document.getElementById(id);
@@ -30,6 +30,7 @@ function readForm(): Settings {
     model: $("model").value.trim(),
     temperature: Number($("temperature").value),
     timeoutMs: Number($("timeoutMs").value),
+    responseFormat: $("responseFormat").value as ResponseFormat,
     maxBodyChars: Number($("maxBodyChars").value),
     concurrency: Number($("concurrency").value),
     batchSize: Number($("batchSize").value),
@@ -44,6 +45,7 @@ function writeForm(s: Settings): void {
   $("model").value = s.model;
   $("temperature").value = String(s.temperature);
   $("timeoutMs").value = String(s.timeoutMs);
+  $("responseFormat").value = s.responseFormat;
   $("maxBodyChars").value = String(s.maxBodyChars);
   $("concurrency").value = String(s.concurrency);
   $("batchSize").value = String(s.batchSize);
