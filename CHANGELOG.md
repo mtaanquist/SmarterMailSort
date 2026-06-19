@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-19
+
+### Fixed
+- Folder context-menu item ("Sort with SmarterMailSort…") did nothing when
+  clicked. The handler required `info.selectedFolder.id` to be present, which
+  isn't reliably populated; it now falls back to `displayedFolder` and always
+  opens the sort tab (with the folder preselected when an id is available),
+  logging a diagnostic when no folder id is found.
+
 ## [0.2.4] - 2026-06-19
 
 ### Fixed
@@ -85,7 +94,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...v0.2.2

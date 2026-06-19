@@ -93,9 +93,18 @@ function registerEntryPoints(): void {
 
   try {
     messenger.menus.onClicked.addListener((info) => {
-      if (info.menuItemId === FOLDER_MENU_ID && info.selectedFolder?.id) {
-        void openApp(info.selectedFolder.id);
+      if (info.menuItemId !== FOLDER_MENU_ID) return;
+      // Prefer the right-clicked folder; fall back to the displayed folder.
+      // Always open the tab even if no folder id is available, so the click is
+      // never a silent no-op (it just opens without a preselection).
+      const folderId = info.selectedFolder?.id ?? info.displayedFolder?.id;
+      if (!folderId) {
+        console.warn(
+          "SmarterMailSort: folder menu click had no folder id; info keys:",
+          Object.keys(info),
+        );
       }
+      void openApp(folderId);
     });
     // removeAll() first keeps creation idempotent across event-page restarts.
     void messenger.menus

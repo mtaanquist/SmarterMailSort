@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SmarterMailSort",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Sort mail folders with an OpenAI-compatible LLM using natural-language instructions.",
   "author": "SmarterMailSort contributors",
   "browser_specific_settings": {
