@@ -12,7 +12,13 @@ import {
   type UiResponse,
 } from "../core/protocol.js";
 import { buildMarkdownReport } from "../core/report.js";
-import { findPreset, removePreset, upsertPreset } from "../core/presets.js";
+import {
+  DEFAULT_PRESETS,
+  findPreset,
+  mergePresets,
+  removePreset,
+  upsertPreset,
+} from "../core/presets.js";
 import type { ClassifiedMessage, FolderNode, Preset } from "../core/types.js";
 
 const el = {
@@ -22,6 +28,7 @@ const el = {
   presetName: document.getElementById("preset-name") as HTMLInputElement,
   savePreset: document.getElementById("save-preset") as HTMLButtonElement,
   deletePreset: document.getElementById("delete-preset") as HTMLButtonElement,
+  restorePresets: document.getElementById("restore-presets") as HTMLButtonElement,
   start: document.getElementById("start") as HTMLButtonElement,
   abort: document.getElementById("abort") as HTMLButtonElement,
   crossAccount: document.getElementById("cross-account") as HTMLInputElement,
@@ -397,6 +404,14 @@ function wireEvents(): void {
     presets = removePreset(presets, name);
     if (!(await persistPresets())) return;
     el.presetName.value = "";
+    populatePresetSelect();
+  });
+
+  el.restorePresets.addEventListener("click", async () => {
+    setError(null);
+    // Add back any missing built-ins without touching the user's own presets.
+    presets = mergePresets(presets, DEFAULT_PRESETS);
+    if (!(await persistPresets())) return;
     populatePresetSelect();
   });
 
