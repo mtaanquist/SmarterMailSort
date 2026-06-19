@@ -27,6 +27,12 @@ import {
   loadCheckpoint,
   saveCheckpoint,
 } from "../platform/checkpointStore.js";
+import {
+  loadLastInstruction,
+  loadPresets,
+  savePresets,
+  saveLastInstruction,
+} from "../platform/presetStore.js";
 
 const ports = new Set<browser.runtime.Port>();
 // Id of our dedicated app tab, tracked so we can refocus it without needing
@@ -271,6 +277,8 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "getState":
         return { ok: true, state: runner.getState() };
       case "startClassify":
+        // Remember the instruction so the UI can prefill it next time.
+        void saveLastInstruction(request.instruction);
         return runner.start(request.sourceFolderId, request.instruction);
       case "abort":
         runner.abort();
@@ -283,6 +291,15 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return runner.resume();
       case "discardResume":
         return runner.discardResume();
+      case "getPresets":
+        return {
+          ok: true,
+          presets: await loadPresets(),
+          lastInstruction: await loadLastInstruction(),
+        };
+      case "savePresets":
+        await savePresets(request.presets);
+        return { ok: true };
       default:
         return { ok: false, error: "unknown request" };
     }

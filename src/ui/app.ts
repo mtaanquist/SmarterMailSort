@@ -11,11 +11,16 @@ import {
   type UiResponse,
 } from "../core/protocol.js";
 import { buildMarkdownReport } from "../core/report.js";
-import type { ClassifiedMessage, FolderNode } from "../core/types.js";
+import { findPreset, removePreset, upsertPreset } from "../core/presets.js";
+import type { ClassifiedMessage, FolderNode, Preset } from "../core/types.js";
 
 const el = {
   folder: document.getElementById("folder") as HTMLSelectElement,
   instruction: document.getElementById("instruction") as HTMLTextAreaElement,
+  presetSelect: document.getElementById("preset-select") as HTMLSelectElement,
+  presetName: document.getElementById("preset-name") as HTMLInputElement,
+  savePreset: document.getElementById("save-preset") as HTMLButtonElement,
+  deletePreset: document.getElementById("delete-preset") as HTMLButtonElement,
   start: document.getElementById("start") as HTMLButtonElement,
   abort: document.getElementById("abort") as HTMLButtonElement,
   settingsLink: document.getElementById("settings-link") as HTMLAnchorElement,
@@ -40,6 +45,7 @@ const el = {
 };
 
 let folders: FolderNode[] = [];
+let presets: Preset[] = [];
 let lastState: JobState | null = null;
 
 function send(request: UiRequest): Promise<UiResponse> {
@@ -79,6 +85,45 @@ async function loadFolders(): Promise<void> {
       el.folder.value = requested;
     }
   }
+}
+
+function populatePresetSelect(): void {
+  const selected = el.presetSelect.value;
+  el.presetSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = presets.length ? "Presets…" : "No saved presets";
+  el.presetSelect.appendChild(placeholder);
+  for (const preset of presets) {
+    const option = document.createElement("option");
+    option.value = preset.name;
+    option.textContent = preset.name;
+    el.presetSelect.appendChild(option);
+  }
+  // Keep the current selection if it still exists.
+  if (findPreset(presets, selected)) el.presetSelect.value = selected;
+  el.deletePreset.disabled = !el.presetSelect.value;
+}
+
+async function loadPresets(): Promise<void> {
+  const res = await send({ type: "getPresets" });
+  if (res.ok && "presets" in res) {
+    presets = res.presets;
+    populatePresetSelect();
+    // Prefill the last-used instruction, but never clobber what the user typed.
+    if (res.lastInstruction && !el.instruction.value.trim()) {
+      el.instruction.value = res.lastInstruction;
+    }
+  }
+}
+
+async function persistPresets(): Promise<boolean> {
+  const res = await send({ type: "savePresets", presets });
+  if (!res.ok && "error" in res) {
+    setError(`Could not save preset: ${res.error}`);
+    return false;
+  }
+  return true;
 }
 
 function renderProgress(state: JobState): void {
@@ -245,6 +290,45 @@ function wireEvents(): void {
 
   el.abort.addEventListener("click", () => void send({ type: "abort" }));
 
+  // Picking a preset fills the instruction and targets it for save/delete.
+  el.presetSelect.addEventListener("change", () => {
+    const preset = findPreset(presets, el.presetSelect.value);
+    if (preset) {
+      el.instruction.value = preset.instruction;
+      el.presetName.value = preset.name;
+    }
+    el.deletePreset.disabled = !el.presetSelect.value;
+  });
+
+  el.savePreset.addEventListener("click", async () => {
+    setError(null);
+    const name = el.presetName.value.trim();
+    const instruction = el.instruction.value.trim();
+    if (!name) {
+      setError("Enter a preset name to save.");
+      return;
+    }
+    if (!instruction) {
+      setError("Enter an instruction to save as a preset.");
+      return;
+    }
+    presets = upsertPreset(presets, name, instruction);
+    if (!(await persistPresets())) return;
+    populatePresetSelect();
+    el.presetSelect.value = name;
+    el.deletePreset.disabled = false;
+  });
+
+  el.deletePreset.addEventListener("click", async () => {
+    setError(null);
+    const name = el.presetSelect.value;
+    if (!name) return;
+    presets = removePreset(presets, name);
+    if (!(await persistPresets())) return;
+    el.presetName.value = "";
+    populatePresetSelect();
+  });
+
   el.apply.addEventListener("click", async () => {
     if (el.dryRun.checked) {
       downloadReport();
@@ -338,7 +422,7 @@ function ensurePort(): void {
 
 async function init(): Promise<void> {
   wireEvents();
-  await loadFolders();
+  await Promise.all([loadFolders(), loadPresets()]);
   ensurePort();
 
   const res = await send({ type: "getState" });

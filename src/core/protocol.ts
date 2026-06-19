@@ -5,6 +5,7 @@ import type {
   ClassifiedMessage,
   ClassifyProgress,
   FolderNode,
+  Preset,
   Settings,
 } from "./types.js";
 
@@ -20,7 +21,9 @@ export type UiRequest =
   | { type: "applyMoves"; messageIds: number[] }
   | { type: "undo" }
   | { type: "resume" }
-  | { type: "discardResume" };
+  | { type: "discardResume" }
+  | { type: "getPresets" }
+  | { type: "savePresets"; presets: Preset[] };
 
 /** Phase of the background job state machine. */
 export type JobPhase = "idle" | "classifying" | "review" | "applying" | "done";
@@ -75,5 +78,6 @@ export type UiResponse =
   | { ok: true; folders: FolderNode[] }
   | { ok: true; models: string[] }
   | { ok: true; state: JobState }
+  | { ok: true; presets: Preset[]; lastInstruction: string }
   | { ok: true }
   | { ok: false; error: string };

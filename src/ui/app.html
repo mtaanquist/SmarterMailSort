@@ -25,6 +25,15 @@
           ></textarea>
         </label>
 
+        <div class="actions preset-row">
+          <select id="preset-select" aria-label="Saved presets">
+            <option value="">Presets…</option>
+          </select>
+          <input id="preset-name" type="text" placeholder="Preset name" aria-label="Preset name" />
+          <button id="save-preset" type="button">Save preset</button>
+          <button id="delete-preset" type="button" disabled>Delete</button>
+        </div>
+
         <div class="actions">
           <button id="start" type="button">Classify</button>
           <button id="abort" type="button" disabled>Stop &amp; review</button>

@@ -49,6 +49,12 @@ export const DEFAULT_SETTINGS: Settings = {
   retryBaseMs: 500,
 };
 
+/** A named, reusable sort instruction the user can pick from a dropdown. */
+export interface Preset {
+  name: string;
+  instruction: string;
+}
+
 /** A compact, model-friendly summary of a single message. */
 export interface MessageSummary {
   /** Thunderbird message id; opaque and only meaningful to the platform layer. */
