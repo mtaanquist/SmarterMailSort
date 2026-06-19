@@ -9,14 +9,38 @@ import type { ChatMessage } from "./promptBuilder.js";
 export type FetchLike = typeof fetch;
 
 export class LlmError extends Error {
+  readonly status?: number;
+  /** Whether the failure is worth retrying (network/timeout/5xx/429). */
+  readonly retryable: boolean;
+  /** Server-requested wait (from a Retry-After header) in milliseconds. */
+  readonly retryAfterMs?: number;
+
   constructor(
     message: string,
-    readonly status?: number,
+    opts: { status?: number; retryable?: boolean; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "LlmError";
+    this.status = opts.status;
+    this.retryable = opts.retryable ?? false;
+    this.retryAfterMs = opts.retryAfterMs;
   }
 }
+
+/** Details handed to the onRetry callback before each backoff wait. */
+export interface RetryInfo {
+  /** 1-based index of the upcoming retry. */
+  attempt: number;
+  /** How long we're about to wait before retrying, in milliseconds. */
+  delayMs: number;
+  error: LlmError;
+}
+
+/** Default retry budget; tunable per-call via {@link ChatOptions}. */
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_RETRY_BASE_MS = 500;
+/** Cap a single backoff wait so a large Retry-After can't stall a run forever. */
+const MAX_BACKOFF_MS = 30_000;
 
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
@@ -26,22 +50,90 @@ function authHeaders(apiKey: string): Record<string, string> {
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
 
+/** Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds. */
+function parseRetryAfter(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(value);
+  if (!Number.isNaN(at)) return Math.max(0, at - Date.now());
+  return undefined;
+}
+
+/** Exponential backoff with full jitter: base·2^attempt + [0, base). */
+function backoffDelay(attempt: number, baseMs: number): number {
+  const exp = Math.min(MAX_BACKOFF_MS, baseMs * 2 ** attempt);
+  return exp + Math.floor(Math.random() * baseMs);
+}
+
+/** Resolve after `ms`, or early if `signal` aborts. */
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export interface ChatOptions {
   /** Ask the endpoint for a JSON object response when supported. */
   jsonMode?: boolean;
   /** Optional external abort signal, merged with the per-request timeout. */
   signal?: AbortSignal;
+  /** Max retries for transient failures. Defaults to 3; 0 disables retrying. */
+  maxRetries?: number;
+  /** Base delay for exponential backoff, in ms. Defaults to 500. */
+  retryBaseMs?: number;
+  /** Called before each backoff wait, e.g. to surface "retrying…" in the UI. */
+  onRetry?: (info: RetryInfo) => void;
+  /** Injectable sleep, primarily so tests can run without real delays. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 /**
- * Send a chat completion request and return the assistant's text content.
- * Throws {@link LlmError} on non-2xx responses, timeouts or malformed payloads.
+ * Retry `fn` while it throws a retryable {@link LlmError}, backing off between
+ * attempts. Honors a server Retry-After over the computed backoff, and stops
+ * immediately on a non-retryable error, an exhausted budget, or an abort.
  */
-export async function chatCompletion(
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: Required<Pick<ChatOptions, "maxRetries" | "retryBaseMs">> &
+    Pick<ChatOptions, "signal" | "onRetry" | "sleep">,
+): Promise<T> {
+  const sleep = opts.sleep ?? defaultSleep;
+  const maxRetries = Math.max(0, Math.floor(opts.maxRetries));
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      const error =
+        err instanceof LlmError ? err : new LlmError((err as Error).message);
+      if (!error.retryable || attempt >= maxRetries || opts.signal?.aborted) {
+        throw err;
+      }
+      const delayMs = error.retryAfterMs ?? backoffDelay(attempt, opts.retryBaseMs);
+      attempt++;
+      opts.onRetry?.({ attempt, delayMs, error });
+      await sleep(delayMs, opts.signal);
+      if (opts.signal?.aborted) throw err;
+    }
+  }
+}
+
+/** A single, un-retried chat completion attempt. */
+async function chatCompletionOnce(
   config: LlmConfig,
   messages: ChatMessage[],
   fetchImpl: FetchLike,
-  options: ChatOptions = {},
+  options: ChatOptions,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -72,20 +164,30 @@ export async function chatCompletion(
       signal: controller.signal,
     });
   } catch (err) {
-    if (controller.signal.aborted) {
-      throw new LlmError(`request timed out after ${config.timeoutMs}ms`);
+    // An external abort is the user cancelling: surface it, don't retry it.
+    if (options.signal?.aborted) {
+      throw new LlmError("request aborted");
     }
-    throw new LlmError(`network error: ${(err as Error).message}`);
+    // Our own timeout, or a genuine network blip — both worth retrying.
+    if (controller.signal.aborted) {
+      throw new LlmError(`request timed out after ${config.timeoutMs}ms`, {
+        retryable: true,
+      });
+    }
+    throw new LlmError(`network error: ${(err as Error).message}`, {
+      retryable: true,
+    });
   } finally {
     clearTimeout(timer);
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new LlmError(
-      `endpoint returned ${response.status}: ${text.slice(0, 300)}`,
-      response.status,
-    );
+    throw new LlmError(`endpoint returned ${response.status}: ${text.slice(0, 300)}`, {
+      status: response.status,
+      retryable: response.status === 429 || response.status >= 500,
+      retryAfterMs: parseRetryAfter(response.headers?.get?.("Retry-After")),
+    });
   }
 
   let payload: {
@@ -102,6 +204,27 @@ export async function chatCompletion(
     throw new LlmError("endpoint response missing choices[0].message.content");
   }
   return content;
+}
+
+/**
+ * Send a chat completion request and return the assistant's text content,
+ * retrying transient failures (network errors, timeouts, 5xx and 429) with
+ * exponential backoff. Throws {@link LlmError} once retries are exhausted, on a
+ * non-retryable error, or on a malformed payload.
+ */
+export async function chatCompletion(
+  config: LlmConfig,
+  messages: ChatMessage[],
+  fetchImpl: FetchLike,
+  options: ChatOptions = {},
+): Promise<string> {
+  return withRetry(() => chatCompletionOnce(config, messages, fetchImpl, options), {
+    maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
+    retryBaseMs: options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS,
+    signal: options.signal,
+    onRetry: options.onRetry,
+    sleep: options.sleep,
+  });
 }
 
 /** Lightweight connectivity probe used by the options "Test connection" button. */

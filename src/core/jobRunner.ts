@@ -4,7 +4,7 @@
 // `classify` + source), which makes every phase transition unit-testable.
 
 import { runClassification } from "./classifier.js";
-import type { BgEvent, JobState } from "./protocol.js";
+import type { BgEvent, JobNotice, JobState } from "./protocol.js";
 import type {
   Decision,
   FolderNode,
@@ -35,6 +35,8 @@ export interface ClassifierContext {
   /** Allowed target paths (source folder path already removed). */
   allowedPaths: Set<string>;
   signal: AbortSignal;
+  /** Surface a transient notice (e.g. "retrying…") to the UI. */
+  onRetry: (notice: JobNotice) => void;
 }
 
 /** Injected side-effecting collaborators. Pure helpers are imported directly. */
@@ -151,6 +153,7 @@ export class JobRunner {
         targets,
         allowedPaths,
         signal,
+        onRetry: (notice) => this.deps.emit({ type: "notice", notice }),
       });
 
       const results = await runClassification({

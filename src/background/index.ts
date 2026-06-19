@@ -3,7 +3,7 @@
 // lifecycle to a JobRunner built from the platform + LLM dependencies.
 
 import { parseDecision, parseDecisions } from "../core/decisionParser.js";
-import { chatCompletion } from "../core/llmClient.js";
+import { chatCompletion, type RetryInfo } from "../core/llmClient.js";
 import { JobRunner } from "../core/jobRunner.js";
 import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
 import {
@@ -125,14 +125,27 @@ async function* summarise(
  * it stays here and is handed to the JobRunner as an injected dependency.
  */
 function createClassifiers(ctx: ClassifierContext): Classifiers {
-  const { instruction, settings, targets, allowedPaths, signal } = ctx;
+  const { instruction, settings, targets, allowedPaths, signal, onRetry } = ctx;
+
+  // Shared LLM request options for this run: JSON mode, the run's abort signal,
+  // the configured retry budget, and a retry hook that surfaces "retrying…".
+  const chatOptions = {
+    jsonMode: true,
+    signal,
+    maxRetries: settings.maxRetries,
+    retryBaseMs: settings.retryBaseMs,
+    onRetry: (info: RetryInfo) => {
+      const what = info.error.status ? `HTTP ${info.error.status}` : "request failed";
+      onRetry({
+        kind: "retry",
+        message: `${what} — retrying (${info.attempt}/${settings.maxRetries}) in ${(info.delayMs / 1000).toFixed(1)}s…`,
+      });
+    },
+  };
 
   const classify = async (summary: MessageSummary): Promise<Decision> => {
     const messages = buildClassificationMessages(instruction, targets, summary);
-    const raw = await chatCompletion(settings, messages, fetch, {
-      jsonMode: true,
-      signal,
-    });
+    const raw = await chatCompletion(settings, messages, fetch, chatOptions);
     return parseDecision(raw, allowedPaths);
   };
 
@@ -146,10 +159,7 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
       targets,
       summaries,
     );
-    const raw = await chatCompletion(settings, messages, fetch, {
-      jsonMode: true,
-      signal,
-    });
+    const raw = await chatCompletion(settings, messages, fetch, chatOptions);
     const byId = parseDecisions(
       raw,
       allowedPaths,

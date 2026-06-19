@@ -27,6 +27,13 @@ export interface Settings extends LlmConfig {
    * round-trips, at the cost of a longer per-request response.
    */
   batchSize: number;
+  /**
+   * How many times to retry a transient LLM failure (network/timeout/5xx/429)
+   * before giving up on that request. 0 disables retrying.
+   */
+  maxRetries: number;
+  /** Base delay for exponential backoff between retries, in milliseconds. */
+  retryBaseMs: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,6 +45,8 @@ export const DEFAULT_SETTINGS: Settings = {
   maxBodyChars: 2000,
   concurrency: 1,
   batchSize: 1,
+  maxRetries: 3,
+  retryBaseMs: 500,
 };
 
 /** A compact, model-friendly summary of a single message. */

@@ -34,10 +34,17 @@ export interface JobState {
   stopped: boolean;
 }
 
+/** A transient, non-state message surfaced to the UI (e.g. a retry notice). */
+export interface JobNotice {
+  kind: "retry";
+  message: string;
+}
+
 /** Push events the background sends to a connected UI port. */
 export type BgEvent =
   | { type: "state"; state: JobState }
-  | { type: "progress"; progress: ClassifyProgress };
+  | { type: "progress"; progress: ClassifyProgress }
+  | { type: "notice"; notice: JobNotice };
 
 export const PORT_NAME = "smartermailsort";
 

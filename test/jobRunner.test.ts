@@ -24,6 +24,8 @@ const SETTINGS: Settings = {
   maxBodyChars: 100,
   concurrency: 1,
   batchSize: 1,
+  maxRetries: 3,
+  retryBaseMs: 500,
 };
 
 const FOLDERS: FolderNode[] = [
@@ -169,6 +171,16 @@ describe("JobRunner.start", () => {
     await waitFor(() => h.runner.getState().error !== null);
     expect(h.runner.getState().phase).toBe("idle");
     expect(h.runner.getState().error).toBe("folders boom");
+  });
+
+  it("forwards a classifier retry notice as a notice event", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    h.capturedCtx?.onRetry({ kind: "retry", message: "retrying…" });
+    expect(
+      h.events.some((e) => e.type === "notice" && e.notice.message === "retrying…"),
+    ).toBe(true);
   });
 
   it("marks the run stopped when aborted mid-classification", async () => {

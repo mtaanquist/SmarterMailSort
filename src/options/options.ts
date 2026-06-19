@@ -33,6 +33,8 @@ function readForm(): Settings {
     maxBodyChars: Number($("maxBodyChars").value),
     concurrency: Number($("concurrency").value),
     batchSize: Number($("batchSize").value),
+    maxRetries: Number($("maxRetries").value),
+    retryBaseMs: Number($("retryBaseMs").value),
   };
 }
 
@@ -45,6 +47,8 @@ function writeForm(s: Settings): void {
   $("maxBodyChars").value = String(s.maxBodyChars);
   $("concurrency").value = String(s.concurrency);
   $("batchSize").value = String(s.batchSize);
+  $("maxRetries").value = String(s.maxRetries);
+  $("retryBaseMs").value = String(s.retryBaseMs);
 }
 
 /**

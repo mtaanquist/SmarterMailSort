@@ -22,6 +22,7 @@ const el = {
   progressPanel: document.getElementById("progress-panel") as HTMLElement,
   progress: document.getElementById("progress") as HTMLProgressElement,
   progressText: document.getElementById("progress-text") as HTMLElement,
+  progressNote: document.getElementById("progress-note") as HTMLElement,
   reviewPanel: document.getElementById("review-panel") as HTMLElement,
   reviewSummary: document.getElementById("review-summary") as HTMLElement,
   review: document.getElementById("review") as HTMLElement,
@@ -41,6 +42,12 @@ function send(request: UiRequest): Promise<UiResponse> {
 function setError(message: string | null): void {
   el.error.hidden = !message;
   el.error.textContent = message ?? "";
+}
+
+/** Show (or clear) a transient note under the progress bar, e.g. "retrying…". */
+function setNote(message: string | null): void {
+  el.progressNote.hidden = !message;
+  el.progressNote.textContent = message ?? "";
 }
 
 async function loadFolders(): Promise<void> {
@@ -88,6 +95,8 @@ function renderProgress(state: JobState): void {
   if (state.phase === "applying") {
     el.progressText.textContent = "Applying moves…";
   }
+  // Retry notices only make sense mid-classification; clear them otherwise.
+  if (!running) setNote(null);
 }
 
 function renderReview(state: JobState): void {
@@ -252,7 +261,11 @@ function handlePortMessage(message: unknown): void {
   if (event.type === "state") applyStateEvent(event.state);
   else if (event.type === "progress" && lastState) {
     lastState.progress = event.progress;
+    // A resolved message clears any retry note shown while it was in flight.
+    setNote(null);
     renderProgress(lastState);
+  } else if (event.type === "notice") {
+    setNote(event.notice.message);
   }
 }
 

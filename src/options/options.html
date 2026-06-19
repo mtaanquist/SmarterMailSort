@@ -42,6 +42,21 @@
             Request timeout (ms)
             <input id="timeoutMs" type="number" min="1000" step="1000" value="60000" />
           </label>
+
+          <label>
+            Max retries on transient failure
+            <input id="maxRetries" type="number" min="0" max="10" step="1" value="3" />
+          </label>
+          <p class="hint">
+            Retries network errors, timeouts, HTTP 429 (rate limit) and 5xx with
+            exponential backoff, honoring a <code>Retry-After</code> header when
+            present. 0 disables retrying.
+          </p>
+
+          <label>
+            Retry base delay (ms)
+            <input id="retryBaseMs" type="number" min="0" step="100" value="500" />
+          </label>
         </fieldset>
 
         <fieldset>
