@@ -27,17 +27,25 @@ feature/* ──PR──▶ develop ──PR──▶ main ──tag──▶ re
 
 1. Open a PR from `develop` into `main` and **squash-merge** it once green.
 2. Bump the version in **both** `package.json` and `src/manifest.json`
-   (keep them in sync) — typically as part of that PR.
-3. Tag the merge commit on `main`:
+   (keep them in sync) and move the `CHANGELOG.md` `[Unreleased]` entries under
+   a new version heading — typically as part of that PR.
+3. Trigger `.github/workflows/release.yml` one of two ways:
 
-   ```bash
-   git checkout main && git pull
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
+   - **Tag push** (preferred):
 
-4. The tag triggers `.github/workflows/release.yml`, which builds the extension,
-   packages it with `web-ext`, and attaches the artifact to a GitHub Release.
+     ```bash
+     git checkout main && git pull
+     git tag v0.1.0
+     git push origin v0.1.0
+     ```
+
+   - **Manual dispatch** (handy when you can't push tags): GitHub → **Actions →
+     Release → Run workflow**, choose the `main` branch and enter the version
+     (e.g. `v0.1.0`). The workflow creates the tag at the current commit and
+     publishes the release.
+
+4. The workflow verifies, builds, packages with `web-ext`, and attaches both
+   `.zip` and `.xpi` artifacts to a GitHub Release.
 
 Tags must match `v*` (e.g. `v0.1.0`). Use [semantic versioning](https://semver.org/).
 
