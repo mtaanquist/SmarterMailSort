@@ -191,6 +191,18 @@ describe("JobRunner.start", () => {
     expect(h.capturedCtx?.allowedPaths.has("Acc/Archive")).toBe(true);
   });
 
+  it("limits targets to folders in the source folder's account", async () => {
+    const crossAccount: FolderNode[] = [
+      ...FOLDERS,
+      { id: "other", path: "Other/Archive", depth: 1, accountName: "Other" },
+    ];
+    const h = makeRunner({ listFolders: async () => crossAccount });
+    h.runner.start("src", "x"); // src is in account "Acc"
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(h.capturedCtx?.targets.map((t) => t.id)).toEqual(["fA", "fB"]);
+    expect(h.capturedCtx?.allowedPaths.has("Other/Archive")).toBe(false);
+  });
+
   it("emits a state event for the classifying and review transitions", async () => {
     const h = makeRunner();
     h.runner.start("src", "x");
