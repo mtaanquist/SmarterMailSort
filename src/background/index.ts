@@ -85,18 +85,26 @@ async function openApp(folderId?: string): Promise<void> {
 
   // Reuse the existing app tab if we still have one. tabs.get/update/create do
   // not require the "tabs" permission (filtering by URL would).
+  let reused = false;
   if (appTabId !== undefined) {
     try {
       await messenger.tabs.get(appTabId);
       await messenger.tabs.update(appTabId, { active: true, url });
-      return;
+      reused = true;
     } catch {
       appTabId = undefined; // the tab was closed since we last saw it
     }
   }
 
-  const tab = await messenger.tabs.create({ url });
-  appTabId = tab.id ?? undefined;
+  if (!reused) {
+    const tab = await messenger.tabs.create({ url });
+    appTabId = tab.id ?? undefined;
+  }
+
+  // A fresh tab reads the folder from `?folder=` on load. A reused tab won't
+  // reliably reload on a query-only URL change, so push the preselection over
+  // the live port instead (no-op if no UI is connected yet).
+  if (folderId) broadcast({ type: "preselectFolder", folderId });
 }
 
 const FOLDER_MENU_ID = "smartermailsort-sort-folder";
