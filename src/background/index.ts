@@ -44,12 +44,17 @@ function pushState(): void {
   broadcast({ type: "state", state });
 }
 
-/** Open (or focus) the dedicated SmarterMailSort tab. */
-async function openApp(): Promise<void> {
-  const url = messenger.runtime.getURL("ui/app.html");
-  const existing = await messenger.tabs.query({ url });
+/**
+ * Open (or focus) the dedicated SmarterMailSort tab. When `folderId` is given,
+ * it is passed as a query param so the UI can preselect that source folder.
+ */
+async function openApp(folderId?: string): Promise<void> {
+  const base = messenger.runtime.getURL("ui/app.html");
+  const url = folderId ? `${base}?folder=${encodeURIComponent(folderId)}` : base;
+  // Match any existing app tab regardless of its query string.
+  const existing = await messenger.tabs.query({ url: `${base}*` });
   if (existing.length && existing[0].id != null) {
-    await messenger.tabs.update(existing[0].id, { active: true });
+    await messenger.tabs.update(existing[0].id, { active: true, url });
   } else {
     await messenger.tabs.create({ url });
   }
@@ -57,6 +62,26 @@ async function openApp(): Promise<void> {
 
 messenger.browserAction.onClicked.addListener(() => {
   void openApp();
+});
+
+const FOLDER_MENU_ID = "smartermailsort-sort-folder";
+
+// Register a right-click entry on folders. removeAll() first keeps this
+// idempotent across event-page restarts (avoids duplicate-id errors).
+async function setupMenus(): Promise<void> {
+  await messenger.menus.removeAll();
+  messenger.menus.create({
+    id: FOLDER_MENU_ID,
+    title: "Sort with SmarterMailSort…",
+    contexts: ["folder_pane"],
+  });
+}
+void setupMenus();
+
+messenger.menus.onClicked.addListener((info) => {
+  if (info.menuItemId === FOLDER_MENU_ID && info.selectedFolder?.id) {
+    void openApp(info.selectedFolder.id);
+  }
 });
 
 /** Stream every message in the folder as a model-ready summary. */
