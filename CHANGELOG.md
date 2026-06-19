@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-19
+
+### Fixed
+- Clicking the toolbar button (and the folder context menu) failed to open the
+  app: `openApp` queried tabs by URL, which requires the broad `tabs`
+  permission we intentionally don't request. Now tracks its own tab id
+  (via `tabs.get`/`create`/`update`, no extra permission) and clears it on
+  `tabs.onRemoved`.
+
 ## [0.2.1] - 2026-06-19
 
 ### Fixed
@@ -51,7 +60,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mtaanquist/SmarterMailSort/releases/tag/v0.1.0
