@@ -35,6 +35,7 @@ import {
   loadPresets,
   savePresets,
   saveLastInstruction,
+  seedDefaultPresetsOnce,
 } from "../platform/presetStore.js";
 
 const ports = new Set<browser.runtime.Port>();
@@ -381,6 +382,9 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "discardResume":
         return runner.discardResume();
       case "getPresets":
+        // Seed first (idempotent) so the first read already includes the
+        // starter set, with no race against a separate startup seed.
+        await seedDefaultPresetsOnce();
         return {
           ok: true,
           presets: await loadPresets(),
@@ -419,3 +423,6 @@ registerEntryPoints();
 // requests await this (see initReady) so recovery never races the load.
 initReady = runner.init();
 void initReady.then(() => log("init complete", runner.getState().phase));
+
+// Seed the starter presets on first run (idempotent; getPresets also ensures it).
+void seedDefaultPresetsOnce();
