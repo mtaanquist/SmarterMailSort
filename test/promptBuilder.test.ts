@@ -14,6 +14,7 @@ const folders: FolderRef[] = [
 
 const summary: MessageSummary = {
   id: 1,
+  headerMessageId: "<sale@example.com>",
   author: "news@example.com",
   recipients: ["me@example.com"],
   ccList: ["cc@example.com"],

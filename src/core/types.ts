@@ -53,6 +53,12 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface MessageSummary {
   /** Thunderbird message id; opaque and only meaningful to the platform layer. */
   id: number;
+  /**
+   * RFC Message-ID header. Unlike `id` (an internal tracking number that does
+   * NOT survive a move to another folder), this is stable across moves, so it's
+   * what the undo path uses to re-locate a message after it's been moved.
+   */
+  headerMessageId: string;
   author: string;
   recipients: string[];
   ccList: string[];
@@ -103,4 +109,31 @@ export interface ClassifyProgress {
   processed: number;
   total: number | null;
   lastResult?: ClassifiedMessage;
+}
+
+/** One moved message, identified by its move-stable RFC Message-ID. */
+export interface UndoItem {
+  headerMessageId: string;
+  /** Folder the message was moved INTO (where undo must look for it now). */
+  destFolderId: string;
+}
+
+/** The record needed to reverse the last applied batch of moves. */
+export interface UndoRecord {
+  /** Folder every message should be moved back to (the original source). */
+  sourceFolderId: string;
+  items: UndoItem[];
+}
+
+/** A message the undo could not move back, with why. */
+export interface UndoFailure {
+  headerMessageId: string;
+  destFolderId: string;
+  error: string;
+}
+
+/** Outcome of reversing an applied batch. */
+export interface UndoOutcome {
+  restored: number;
+  failures: UndoFailure[];
 }

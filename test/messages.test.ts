@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { iterateFolderHeaders, moveBatched } from "../src/platform/messages.js";
+import {
+  iterateFolderHeaders,
+  moveBackByHeaderId,
+  moveBatched,
+} from "../src/platform/messages.js";
 import { clearMockMessenger, installMockMessenger, type MockMessenger } from "./mocks/messenger.js";
 
 let mock: MockMessenger;
@@ -63,5 +67,56 @@ describe("moveBatched", () => {
     const results = await moveBatched(new Map([["folderA", []]]));
     expect(results).toEqual([]);
     expect(mock.messages.move).not.toHaveBeenCalled();
+  });
+});
+
+describe("moveBackByHeaderId", () => {
+  it("re-locates messages by header id and moves them back to the source", async () => {
+    // dest "fA" holds m1 (now id 11) and m2 (now id 12); dest "fB" holds m3 (id 13).
+    const found: Record<string, number> = {
+      "<m1>": 11,
+      "<m2>": 12,
+      "<m3>": 13,
+    };
+    mock.messages.query.mockImplementation(async (q: { headerMessageId: string }) => ({
+      id: null,
+      messages: [{ id: found[q.headerMessageId] }],
+    }));
+
+    const outcome = await moveBackByHeaderId({
+      sourceFolderId: "src",
+      items: [
+        { headerMessageId: "<m1>", destFolderId: "fA" },
+        { headerMessageId: "<m2>", destFolderId: "fA" },
+        { headerMessageId: "<m3>", destFolderId: "fB" },
+      ],
+    });
+
+    expect(outcome).toEqual({ restored: 3, failures: [] });
+    expect(mock.messages.move).toHaveBeenCalledWith([11, 12], "src");
+    expect(mock.messages.move).toHaveBeenCalledWith([13], "src");
+  });
+
+  it("records a failure when a message can no longer be found", async () => {
+    mock.messages.query.mockResolvedValue({ id: null, messages: [] });
+    const outcome = await moveBackByHeaderId({
+      sourceFolderId: "src",
+      items: [{ headerMessageId: "<gone>", destFolderId: "fA" }],
+    });
+    expect(outcome.restored).toBe(0);
+    expect(outcome.failures).toHaveLength(1);
+    expect(outcome.failures[0]).toMatchObject({ headerMessageId: "<gone>" });
+    expect(mock.messages.move).not.toHaveBeenCalled();
+  });
+
+  it("records a failure when the move back throws", async () => {
+    mock.messages.query.mockResolvedValue({ id: null, messages: [{ id: 99 }] });
+    mock.messages.move.mockRejectedValueOnce(new Error("locked"));
+    const outcome = await moveBackByHeaderId({
+      sourceFolderId: "src",
+      items: [{ headerMessageId: "<m1>", destFolderId: "fA" }],
+    });
+    expect(outcome.restored).toBe(0);
+    expect(outcome.failures[0].error).toBe("locked");
   });
 });

@@ -11,6 +11,9 @@ import type {
   FolderRef,
   MessageSummary,
   Settings,
+  UndoItem,
+  UndoOutcome,
+  UndoRecord,
 } from "./types.js";
 
 /** Outcome of moving one destination group; mirrors `moveBatched`. */
@@ -54,6 +57,14 @@ export interface JobRunnerDeps {
   createClassifiers: (ctx: ClassifierContext) => Classifiers;
   /** Apply moves grouped by destination folder id. */
   moveMessages: (byFolderId: Map<string, number[]>) => Promise<MoveOutcome[]>;
+  /** Reverse a previously-applied batch (move each message back to source). */
+  undoMoves: (record: UndoRecord) => Promise<UndoOutcome>;
+  /** Load any persisted undo record (e.g. after an event-page restart). */
+  loadUndo: () => Promise<UndoRecord | null>;
+  /** Persist the undo record for the batch just applied. */
+  saveUndo: (record: UndoRecord) => Promise<void>;
+  /** Forget the persisted undo record. */
+  clearUndo: () => Promise<void>;
   /** Sink for state/progress events (wired to port broadcast in production). */
   emit: (event: BgEvent) => void;
 }
@@ -70,6 +81,7 @@ function initialState(): JobState {
     results: [],
     error: null,
     stopped: false,
+    undo: null,
   };
 }
 
@@ -81,8 +93,22 @@ function initialState(): JobState {
 export class JobRunner {
   private state: JobState = initialState();
   private abortController: AbortController | null = null;
+  /** Full record backing `state.undo`; kept in memory and persisted via deps. */
+  private undoRecord: UndoRecord | null = null;
 
   constructor(private readonly deps: JobRunnerDeps) {}
+
+  /**
+   * Restore any persisted undo record (the event page may have suspended since
+   * the last apply). Safe to call once at startup; emits state if anything loads.
+   */
+  async init(): Promise<void> {
+    const record = await this.deps.loadUndo();
+    if (record && record.items.length) {
+      this.setUndo(record);
+      this.emitState();
+    }
+  }
 
   /** Current snapshot, e.g. to seed a newly connected UI port. */
   getState(): JobState {
@@ -101,6 +127,9 @@ export class JobRunner {
     this.state.error = null;
     this.state.stopped = false;
     this.state.progress = { processed: 0, total: null };
+    // A new run invalidates any undo from the previous apply.
+    this.setUndo(null);
+    void this.deps.clearUndo();
     this.emitState();
 
     this.abortController = new AbortController();
@@ -126,8 +155,31 @@ export class JobRunner {
     return { ok: true };
   }
 
+  /** Move the most recently applied batch back to its source folder. */
+  undo(): JobActionResult {
+    if (this.state.phase === "classifying" || this.state.phase === "applying") {
+      return { ok: false, error: "a job is already running" };
+    }
+    if (!this.undoRecord) {
+      return { ok: false, error: "nothing to undo" };
+    }
+    const record = this.undoRecord;
+    this.state.phase = "applying";
+    this.state.error = null;
+    this.emitState();
+
+    void this.runUndo(record);
+    return { ok: true };
+  }
+
   private emitState(): void {
     this.deps.emit({ type: "state", state: this.state });
+  }
+
+  /** Update both the in-memory undo record and the UI-facing summary. */
+  private setUndo(record: UndoRecord | null): void {
+    this.undoRecord = record;
+    this.state.undo = record ? { count: record.items.length } : null;
   }
 
   private async runJob(
@@ -186,8 +238,10 @@ export class JobRunner {
       const { byPath } = this.deps.toFolderIndex(nodes);
       const selected = new Set(messageIds);
 
-      // Group the still-selected move decisions by destination folder id.
+      // Group the still-selected move decisions by destination folder id, and in
+      // parallel capture move-stable header ids per destination for a later undo.
       const byFolderId = new Map<string, number[]>();
+      const undoByFolderId = new Map<string, UndoItem[]>();
       for (const item of this.state.results) {
         if (item.decision.action !== "move" || !item.decision.folder) continue;
         if (!selected.has(item.summary.id)) continue;
@@ -196,6 +250,15 @@ export class JobRunner {
         const list = byFolderId.get(node.id) ?? [];
         list.push(item.summary.id);
         byFolderId.set(node.id, list);
+        // Only messages with a Message-ID can be reliably located for undo.
+        if (item.summary.headerMessageId) {
+          const undoList = undoByFolderId.get(node.id) ?? [];
+          undoList.push({
+            headerMessageId: item.summary.headerMessageId,
+            destFolderId: node.id,
+          });
+          undoByFolderId.set(node.id, undoList);
+        }
       }
 
       const outcomes = await this.deps.moveMessages(byFolderId);
@@ -205,10 +268,55 @@ export class JobRunner {
           .map((f) => `${f.folderId}: ${f.error}`)
           .join("; ")}`;
       }
+
+      // Build the undo record from the destinations that moved successfully.
+      const failedFolders = new Set(failed.map((f) => f.folderId));
+      const undoItems: UndoItem[] = [];
+      for (const [destFolderId, items] of undoByFolderId) {
+        if (!failedFolders.has(destFolderId)) undoItems.push(...items);
+      }
+      await this.recordUndo(undoItems);
+
       this.state.phase = "done";
     } catch (err) {
       this.state.error = (err as Error).message;
       this.state.phase = "review";
+    } finally {
+      this.emitState();
+    }
+  }
+
+  /** Persist (or clear) the undo record for the batch that just applied. */
+  private async recordUndo(items: UndoItem[]): Promise<void> {
+    if (this.state.sourceFolderId && items.length) {
+      const record: UndoRecord = {
+        sourceFolderId: this.state.sourceFolderId,
+        items,
+      };
+      this.setUndo(record);
+      await this.deps.saveUndo(record);
+    } else {
+      this.setUndo(null);
+      await this.deps.clearUndo();
+    }
+  }
+
+  private async runUndo(record: UndoRecord): Promise<void> {
+    try {
+      const outcome = await this.deps.undoMoves(record);
+      this.state.error = outcome.failures.length
+        ? `Undo: restored ${outcome.restored}, ${outcome.failures.length} could not be moved back.`
+        : null;
+      // The batch is consumed whether or not every message came back; the ones
+      // that failed are gone (moved/deleted) and retrying won't recover them.
+      this.setUndo(null);
+      await this.deps.clearUndo();
+      this.state.phase = "idle";
+    } catch (err) {
+      // The reverse move itself failed wholesale; keep the record (and its
+      // banner) so the user can retry, and settle back to idle.
+      this.state.error = (err as Error).message;
+      this.state.phase = "idle";
     } finally {
       this.emitState();
     }

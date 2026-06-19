@@ -5,6 +5,7 @@ import type { Decision, MessageSummary } from "../src/core/types.js";
 function summary(id: number): MessageSummary {
   return {
     id,
+    headerMessageId: `<msg-${id}@example.com>`,
     author: `a${id}`,
     recipients: [],
     ccList: [],

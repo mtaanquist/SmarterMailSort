@@ -6,6 +6,7 @@ function item(id: number, action: "move" | "keep", folder: string | null, error?
   return {
     summary: {
       id,
+      headerMessageId: `<msg-${id}@example.com>`,
       author: `a${id}`,
       recipients: [],
       ccList: [],

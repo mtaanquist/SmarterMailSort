@@ -7,6 +7,8 @@ import type { MessageSummary } from "./types.js";
 /** Subset of `messenger.messages.MessageHeader` we rely on. */
 export interface RawHeader {
   id: number;
+  /** RFC Message-ID; stable across folder moves (unlike `id`). */
+  headerMessageId?: string;
   author?: string;
   recipients?: string[];
   ccList?: string[];
@@ -105,6 +107,7 @@ export function buildSummary(
 
   return {
     id: header.id,
+    headerMessageId: header.headerMessageId ?? "",
     author: header.author ?? "",
     recipients: header.recipients ?? [],
     ccList: header.ccList ?? [],

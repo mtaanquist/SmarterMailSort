@@ -14,8 +14,14 @@ import { PORT_NAME, type BgEvent, type UiRequest, type UiResponse } from "../cor
 import { testConnection } from "../core/llmClient.js";
 import type { Decision, MessageSummary } from "../core/types.js";
 import { listFolderTree, toFolderIndex } from "../platform/folders.js";
-import { getSummary, iterateFolderHeaders, moveBatched } from "../platform/messages.js";
+import {
+  getSummary,
+  iterateFolderHeaders,
+  moveBackByHeaderId,
+  moveBatched,
+} from "../platform/messages.js";
 import { loadSettings, saveSettings } from "../platform/settings.js";
+import { clearUndo, loadUndo, saveUndo } from "../platform/undoStore.js";
 
 const ports = new Set<browser.runtime.Port>();
 // Id of our dedicated app tab, tracked so we can refocus it without needing
@@ -186,6 +192,10 @@ const runner = new JobRunner({
   summarise,
   createClassifiers,
   moveMessages: moveBatched,
+  undoMoves: moveBackByHeaderId,
+  loadUndo,
+  saveUndo,
+  clearUndo,
   emit: broadcast,
 });
 
@@ -223,6 +233,8 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return { ok: true };
       case "applyMoves":
         return runner.apply(request.messageIds);
+      case "undo":
+        return runner.undo();
       default:
         return { ok: false, error: "unknown request" };
     }
@@ -236,3 +248,6 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // Register UI entry points last, so the message handler above is always live.
 registerEntryPoints();
+
+// Restore any persisted "undo last apply" so it survives event-page restarts.
+void runner.init();

@@ -3,7 +3,11 @@
 // the testable logic lives in core/.
 
 import { buildSummary, type RawHeader, type RawPart } from "../core/messageSummary.js";
-import type { MessageSummary } from "../core/types.js";
+import type {
+  MessageSummary,
+  UndoOutcome,
+  UndoRecord,
+} from "../core/types.js";
 
 type MessageList = {
   id: string | null;
@@ -47,6 +51,90 @@ export async function getSummary(
     header.id,
   )) as unknown as RawPart;
   return buildSummary(header, full, maxBodyChars);
+}
+
+/**
+ * Find the current ids of a message (by its move-stable RFC Message-ID) within
+ * a specific folder. Returns every match; normally 0 (gone) or 1.
+ */
+async function findIdsByHeaderId(
+  folderId: string,
+  headerMessageId: string,
+): Promise<number[]> {
+  const ids: number[] = [];
+  let page = (await messenger.messages.query({
+    folderId,
+    headerMessageId,
+  } as Parameters<typeof messenger.messages.query>[0])) as unknown as MessageList;
+  for (;;) {
+    for (const header of page.messages) ids.push(header.id);
+    if (!page.id) break;
+    page = (await messenger.messages.continueList(
+      page.id,
+    )) as unknown as MessageList;
+  }
+  return ids;
+}
+
+/**
+ * Reverse a previously-applied batch: for each moved message, re-locate it in
+ * the folder it was moved into (by RFC Message-ID, since numeric ids don't
+ * survive a move) and move it back to the original source folder. Reports any
+ * message it could not find (moved/deleted since) or could not move.
+ */
+export async function moveBackByHeaderId(
+  record: UndoRecord,
+): Promise<UndoOutcome> {
+  // Group by destination folder so each folder's restorable ids move in one call.
+  const byDest = new Map<string, string[]>();
+  for (const item of record.items) {
+    const list = byDest.get(item.destFolderId) ?? [];
+    list.push(item.headerMessageId);
+    byDest.set(item.destFolderId, list);
+  }
+
+  const outcome: UndoOutcome = { restored: 0, failures: [] };
+  for (const [destFolderId, headerMessageIds] of byDest) {
+    const ids: number[] = [];
+    for (const headerMessageId of headerMessageIds) {
+      try {
+        const found = await findIdsByHeaderId(destFolderId, headerMessageId);
+        if (found.length) ids.push(...found);
+        else
+          outcome.failures.push({
+            headerMessageId,
+            destFolderId,
+            error: "not found (moved or deleted since apply)",
+          });
+      } catch (err) {
+        outcome.failures.push({
+          headerMessageId,
+          destFolderId,
+          error: (err as Error).message,
+        });
+      }
+    }
+    if (!ids.length) continue;
+    try {
+      await messenger.messages.move(
+        ids,
+        record.sourceFolderId as unknown as Parameters<
+          typeof messenger.messages.move
+        >[1],
+      );
+      outcome.restored += ids.length;
+    } catch (err) {
+      // The whole folder's move-back failed; attribute it to those messages.
+      for (const headerMessageId of headerMessageIds) {
+        outcome.failures.push({
+          headerMessageId,
+          destFolderId,
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
+  return outcome;
 }
 
 /**

@@ -9,6 +9,7 @@ export interface MockMessenger {
   messages: {
     list: ReturnType<typeof vi.fn>;
     continueList: ReturnType<typeof vi.fn>;
+    query: ReturnType<typeof vi.fn>;
     getFull: ReturnType<typeof vi.fn>;
     move: ReturnType<typeof vi.fn>;
   };
@@ -16,6 +17,7 @@ export interface MockMessenger {
     local: {
       get: ReturnType<typeof vi.fn>;
       set: ReturnType<typeof vi.fn>;
+      remove: ReturnType<typeof vi.fn>;
     };
   };
 }
@@ -27,6 +29,7 @@ export function installMockMessenger(): MockMessenger {
     messages: {
       list: vi.fn(),
       continueList: vi.fn(),
+      query: vi.fn(),
       getFull: vi.fn(),
       move: vi.fn().mockResolvedValue(undefined),
     },
@@ -34,6 +37,7 @@ export function installMockMessenger(): MockMessenger {
       local: {
         get: vi.fn().mockResolvedValue({}),
         set: vi.fn().mockResolvedValue(undefined),
+        remove: vi.fn().mockResolvedValue(undefined),
       },
     },
   };

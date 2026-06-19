@@ -23,6 +23,9 @@ const el = {
   progress: document.getElementById("progress") as HTMLProgressElement,
   progressText: document.getElementById("progress-text") as HTMLElement,
   progressNote: document.getElementById("progress-note") as HTMLElement,
+  undoPanel: document.getElementById("undo-panel") as HTMLElement,
+  undoText: document.getElementById("undo-text") as HTMLElement,
+  undo: document.getElementById("undo") as HTMLButtonElement,
   reviewPanel: document.getElementById("review-panel") as HTMLElement,
   reviewSummary: document.getElementById("review-summary") as HTMLElement,
   review: document.getElementById("review") as HTMLElement,
@@ -163,10 +166,20 @@ function renderFolderGroup(
   return details;
 }
 
+function renderUndo(state: JobState): void {
+  const busy = state.phase === "classifying" || state.phase === "applying";
+  el.undoPanel.hidden = !state.undo;
+  if (state.undo) {
+    el.undoText.textContent = `Last apply moved ${state.undo.count} message(s). You can move them back.`;
+  }
+  el.undo.disabled = busy;
+}
+
 function render(state: JobState): void {
   lastState = state;
   setError(state.error);
   renderProgress(state);
+  renderUndo(state);
   renderReview(state);
 }
 
@@ -226,6 +239,13 @@ function wireEvents(): void {
     }
     ensurePort(); // receive the applying/done state transitions
     const res = await send({ type: "applyMoves", messageIds: ids });
+    if (!res.ok && "error" in res) setError(res.error);
+  });
+
+  el.undo.addEventListener("click", async () => {
+    setError(null);
+    ensurePort(); // receive the applying/idle transitions
+    const res = await send({ type: "undo" });
     if (!res.ok && "error" in res) setError(res.error);
   });
 

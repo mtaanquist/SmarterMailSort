@@ -13,6 +13,8 @@ import type {
   FolderNode,
   MessageSummary,
   Settings,
+  UndoOutcome,
+  UndoRecord,
 } from "../src/core/types.js";
 
 const SETTINGS: Settings = {
@@ -37,6 +39,7 @@ const FOLDERS: FolderNode[] = [
 function summary(id: number): MessageSummary {
   return {
     id,
+    headerMessageId: `<msg-${id}@example.com>`,
     author: `a${id}`,
     recipients: [],
     ccList: [],
@@ -69,6 +72,9 @@ interface Harness {
   phaseLog: string[];
   capturedCtx: ClassifierContext | null;
   moveMessages: ReturnType<typeof vi.fn>;
+  undoMoves: ReturnType<typeof vi.fn>;
+  saveUndo: ReturnType<typeof vi.fn>;
+  clearUndo: ReturnType<typeof vi.fn>;
 }
 
 function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
@@ -80,6 +86,11 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
     phaseLog,
     capturedCtx: null,
     moveMessages: vi.fn(async (): Promise<MoveOutcome[]> => []),
+    undoMoves: vi.fn(
+      async (): Promise<UndoOutcome> => ({ restored: 0, failures: [] }),
+    ),
+    saveUndo: vi.fn(async () => {}),
+    clearUndo: vi.fn(async () => {}),
   };
 
   const ids = [1, 2, 3];
@@ -98,6 +109,10 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
       };
     },
     moveMessages: harness.moveMessages,
+    undoMoves: harness.undoMoves,
+    loadUndo: async () => null,
+    saveUndo: harness.saveUndo,
+    clearUndo: harness.clearUndo,
     emit: (e) => {
       events.push(e);
       if (e.type === "state") phaseLog.push(e.state.phase);
@@ -257,5 +272,110 @@ describe("JobRunner.apply", () => {
     await waitFor(() => h.runner.getState().error !== null);
     expect(h.runner.getState().phase).toBe("review");
     expect(h.runner.getState().error).toBe("move boom");
+  });
+
+  it("records and persists an undo record for the moved messages", async () => {
+    const h = await toReview();
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    expect(h.runner.getState().undo).toEqual({ count: 2 });
+    expect(h.saveUndo).toHaveBeenCalledTimes(1);
+    const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
+    expect(record.sourceFolderId).toBe("src");
+    expect(record.items).toEqual([
+      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA" },
+      { headerMessageId: "<msg-3@example.com>", destFolderId: "fB" },
+    ]);
+  });
+
+  it("excludes messages in a failed destination from the undo record", async () => {
+    const h = await toReview({
+      moveMessages: vi.fn(async () => [
+        { folderId: "fA", moved: 1 },
+        { folderId: "fB", moved: 0, error: "locked" },
+      ]),
+    });
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+    const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
+    expect(record.items).toEqual([
+      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA" },
+    ]);
+  });
+
+  it("clears the undo record when nothing was moved", async () => {
+    const h = await toReview();
+    h.runner.apply([2]); // 2 is a keep -> no moves
+    await waitFor(() => h.runner.getState().phase === "done");
+    expect(h.runner.getState().undo).toBeNull();
+    expect(h.clearUndo).toHaveBeenCalled();
+    expect(h.saveUndo).not.toHaveBeenCalled();
+  });
+});
+
+describe("JobRunner.undo", () => {
+  async function toDone(overrides?: Partial<JobRunnerDeps>): Promise<Harness> {
+    const h = makeRunner(overrides);
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+    return h;
+  }
+
+  it("rejects undo when there is nothing to undo", () => {
+    const h = makeRunner();
+    expect(h.runner.undo()).toEqual({ ok: false, error: "nothing to undo" });
+  });
+
+  it("reverses the last apply, clears the record, and returns to idle", async () => {
+    const h = await toDone();
+    h.undoMoves.mockResolvedValue({ restored: 2, failures: [] });
+    const res = h.runner.undo();
+    expect(res).toEqual({ ok: true });
+    await waitFor(() => h.runner.getState().phase === "idle");
+
+    expect(h.undoMoves).toHaveBeenCalledTimes(1);
+    const record = h.undoMoves.mock.calls[0][0] as UndoRecord;
+    expect(record.items).toHaveLength(2);
+    expect(h.runner.getState().undo).toBeNull();
+    expect(h.clearUndo).toHaveBeenCalled();
+    expect(h.runner.getState().error).toBeNull();
+  });
+
+  it("reports partial undo failures", async () => {
+    const h = await toDone();
+    h.undoMoves.mockResolvedValue({
+      restored: 1,
+      failures: [{ headerMessageId: "<msg-3@example.com>", destFolderId: "fB", error: "gone" }],
+    });
+    h.runner.undo();
+    await waitFor(() => h.runner.getState().phase === "idle");
+    expect(h.runner.getState().error).toContain("restored 1");
+    expect(h.runner.getState().undo).toBeNull();
+  });
+
+  it("loads a persisted undo record on init", async () => {
+    const record: UndoRecord = {
+      sourceFolderId: "src",
+      items: [{ headerMessageId: "<m@x>", destFolderId: "fA" }],
+    };
+    const h = makeRunner({ loadUndo: async () => record });
+    await h.runner.init();
+    expect(h.runner.getState().undo).toEqual({ count: 1 });
+    // And it can be reversed after a restart, with no prior in-session apply.
+    h.runner.undo();
+    await waitFor(() => h.runner.getState().phase === "idle");
+    expect(h.undoMoves).toHaveBeenCalledWith(record);
+  });
+
+  it("clears the undo record when a new job starts", async () => {
+    const h = await toDone();
+    expect(h.runner.getState().undo).not.toBeNull();
+    h.runner.start("src", "again");
+    expect(h.runner.getState().undo).toBeNull();
+    expect(h.clearUndo).toHaveBeenCalled();
+    await waitFor(() => h.runner.getState().phase === "review");
   });
 });

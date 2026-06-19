@@ -17,10 +17,17 @@ export type UiRequest =
   | { type: "startClassify"; sourceFolderId: string; instruction: string }
   | { type: "abort" }
   | { type: "getState" }
-  | { type: "applyMoves"; messageIds: number[] };
+  | { type: "applyMoves"; messageIds: number[] }
+  | { type: "undo" };
 
 /** Phase of the background job state machine. */
 export type JobPhase = "idle" | "classifying" | "review" | "applying" | "done";
+
+/** Lightweight, UI-facing view of the available "undo last apply". */
+export interface UndoSummary {
+  /** Number of messages that can be moved back. */
+  count: number;
+}
 
 /** Snapshot of the current job the UI renders. */
 export interface JobState {
@@ -32,6 +39,8 @@ export interface JobState {
   error: string | null;
   /** True when the last classification run was stopped early by the user. */
   stopped: boolean;
+  /** Present when the most recent apply can be undone; else null. */
+  undo: UndoSummary | null;
 }
 
 /** A transient, non-state message surfaced to the UI (e.g. a retry notice). */

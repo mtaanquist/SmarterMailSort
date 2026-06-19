@@ -3,6 +3,7 @@ import { buildSummary, type RawHeader, type RawPart } from "../src/core/messageS
 
 const header: RawHeader = {
   id: 7,
+  headerMessageId: "<digest-42@example.com>",
   author: "News <news@example.com>",
   recipients: ["me@example.com"],
   ccList: [],
@@ -22,6 +23,7 @@ describe("buildSummary", () => {
     const summary = buildSummary(header, full, 11);
     expect(summary.bodyExcerpt).toBe("hello plain");
     expect(summary.subject).toBe("Weekly digest");
+    expect(summary.headerMessageId).toBe("<digest-42@example.com>");
     expect(summary.date).toBe("2026-01-02T03:04:05.000Z");
   });
 
