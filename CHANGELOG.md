@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-19
+
+### Fixed
+- Folder picker only listed account root folders, not the folders inside them.
+  `accounts.list()` doesn't populate the nested `subFolders` tree in MV3, so
+  the hierarchy is now fetched explicitly via `folders.getSubFolders(root,
+  true)` (with a fallback to any folders the account already carried).
+- UI now reconnects its background port if the event page suspends (the source
+  of the harmless "closed conduit" console warning), and ignores a respawned
+  empty state so a review in progress isn't wiped from the screen.
+
 ## [0.2.2] - 2026-06-19
 
 ### Fixed
@@ -60,7 +71,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.1.0...v0.2.0

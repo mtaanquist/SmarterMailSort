@@ -29,32 +29,43 @@ function walk(
   folder: MailFolder,
   accountName: string,
   accountId: string,
-  prefix: string,
+  parentPath: string,
   depth: number,
   out: FolderNode[],
 ): void {
-  const name = folder.name ?? folder.path ?? "";
-  const path = prefix ? `${prefix}/${name}` : `${accountName}/${name}`;
-  // Skip the synthetic root folder (no name) but still descend into it.
-  if (name) {
-    out.push({ id: folderId(folder, accountId), path, depth, accountName });
-  }
-  const children = folder.subFolders ?? [];
-  for (const child of children) {
-    walk(child, accountName, accountId, name ? path : `${accountName}`, name ? depth + 1 : depth, out);
+  const name = folder.name || folder.path || "(folder)";
+  const path = parentPath ? `${parentPath}/${name}` : `${accountName}/${name}`;
+  out.push({ id: folderId(folder, accountId), path, depth, accountName });
+  for (const child of folder.subFolders ?? []) {
+    walk(child, accountName, accountId, path, depth + 1, out);
   }
 }
 
-/** Enumerate every folder across all accounts as a flat, depth-tagged list. */
+/**
+ * Enumerate every folder across all accounts as a flat, depth-tagged list.
+ *
+ * `accounts.list()` returns each account's root folder but does NOT populate
+ * the nested `subFolders` tree (in MV3 subfolders are only included when
+ * explicitly requested), so we fetch the hierarchy with
+ * `folders.getSubFolders(root, true)`.
+ */
 export async function listFolderTree(): Promise<FolderNode[]> {
   const accounts = (await messenger.accounts.list()) as unknown as MailAccount[];
   const out: FolderNode[] = [];
   for (const account of accounts) {
-    const roots = account.rootFolder
-      ? [account.rootFolder]
-      : (account.folders ?? []);
-    for (const root of roots) {
-      walk(root, account.name, account.id, "", 0, out);
+    const root = account.rootFolder ?? account;
+    let tops: MailFolder[];
+    try {
+      tops = (await messenger.folders.getSubFolders(
+        root as unknown as Parameters<typeof messenger.folders.getSubFolders>[0],
+        true,
+      )) as unknown as MailFolder[];
+    } catch {
+      // Fall back to whatever the account object already carried.
+      tops = account.rootFolder?.subFolders ?? account.folders ?? [];
+    }
+    for (const top of tops) {
+      walk(top, account.name, account.id, account.name, 0, out);
     }
   }
   return out;
