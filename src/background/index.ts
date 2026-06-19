@@ -30,6 +30,7 @@ import {
   loadCheckpoint,
   saveCheckpoint,
 } from "../platform/checkpointStore.js";
+import { clearReview, loadReview, saveReview } from "../platform/reviewStore.js";
 import {
   loadLastInstruction,
   loadPresets,
@@ -304,6 +305,9 @@ const runner = new JobRunner({
   loadCheckpoint,
   saveCheckpoint,
   clearCheckpoint,
+  loadReview,
+  saveReview,
+  clearReview,
   setKeepalive,
   emit: broadcast,
 });
@@ -419,7 +423,8 @@ void alarms.clear(KEEPALIVE_ALARM);
 registerEntryPoints();
 
 // Restore persisted state the event page may have lost to suspension/restart:
-// the "undo last apply" record and any interrupted-run checkpoint. State-reading
+// the "undo last apply" record, any interrupted-run checkpoint, and a completed
+// run's review snapshot (so proposed moves are still appliable). State-reading
 // requests await this (see initReady) so recovery never races the load.
 initReady = runner.init();
 void initReady.then(() => log("init complete", runner.getState().phase));

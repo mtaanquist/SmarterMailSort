@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   JobRunner,
+  trimResultsForReview,
   type ClassifierContext,
   type Classifiers,
   type JobRunnerDeps,
@@ -9,10 +10,12 @@ import {
 import { toFolderIndex } from "../src/platform/folders.js";
 import type { BgEvent } from "../src/core/protocol.js";
 import type {
+  ClassifiedMessage,
   Decision,
   FolderNode,
   JobCheckpoint,
   MessageSummary,
+  ReviewSnapshot,
   Settings,
   UndoOutcome,
   UndoRecord,
@@ -83,6 +86,8 @@ interface Harness {
   clearUndo: ReturnType<typeof vi.fn>;
   saveCheckpoint: ReturnType<typeof vi.fn>;
   clearCheckpoint: ReturnType<typeof vi.fn>;
+  saveReview: ReturnType<typeof vi.fn>;
+  clearReview: ReturnType<typeof vi.fn>;
   setKeepalive: ReturnType<typeof vi.fn>;
 }
 
@@ -106,6 +111,8 @@ function makeRunner(
     clearUndo: vi.fn(async () => {}),
     saveCheckpoint: vi.fn(async () => {}),
     clearCheckpoint: vi.fn(async () => {}),
+    saveReview: vi.fn(async () => {}),
+    clearReview: vi.fn(async () => {}),
     setKeepalive: vi.fn(),
   };
 
@@ -138,6 +145,9 @@ function makeRunner(
     loadCheckpoint: async () => null,
     saveCheckpoint: harness.saveCheckpoint,
     clearCheckpoint: harness.clearCheckpoint,
+    loadReview: async () => null,
+    saveReview: harness.saveReview,
+    clearReview: harness.clearReview,
     setKeepalive: harness.setKeepalive,
     emit: (e) => {
       events.push(e);
@@ -228,7 +238,10 @@ describe("JobRunner.start", () => {
   it("emits a state event for the classifying and review transitions", async () => {
     const h = makeRunner();
     h.runner.start("src", "x");
-    await waitFor(() => h.runner.getState().phase === "review");
+    // Wait for the settled (emitted) review state, not the early phase flip:
+    // the run finishes settling (checkpoint/review persistence, keepalive off)
+    // in a `finally` that emits last.
+    await waitFor(() => h.phaseLog.at(-1) === "review");
     expect(h.phaseLog[0]).toBe("classifying");
     expect(h.phaseLog.at(-1)).toBe("review");
     expect(h.events.some((e) => e.type === "progress")).toBe(true);
@@ -442,7 +455,9 @@ describe("JobRunner checkpoint + resume", () => {
   it("toggles the keepalive around a run and persists a checkpoint", async () => {
     const h = makeRunner();
     h.runner.start("src", "x");
-    await waitFor(() => h.runner.getState().phase === "review");
+    // Keepalive is turned off in the run's `finally`, which emits the review
+    // state last — wait for that emit rather than the early phase flip.
+    await waitFor(() => h.phaseLog.at(-1) === "review");
 
     expect(h.setKeepalive).toHaveBeenNthCalledWith(1, true);
     expect(h.setKeepalive).toHaveBeenLastCalledWith(false);
@@ -565,5 +580,120 @@ describe("JobRunner checkpoint + resume", () => {
     h.runner.start("src", "x");
     await waitFor(() => h.runner.getState().phase === "review");
     expect(h.clearCheckpoint).toHaveBeenCalled();
+  });
+});
+
+describe("JobRunner review snapshot", () => {
+  it("persists a review snapshot when classification completes", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "sort it");
+    await waitFor(() => h.saveReview.mock.calls.length > 0);
+
+    expect(h.saveReview).toHaveBeenCalled();
+    const snap = h.saveReview.mock.calls.at(-1)![0] as ReviewSnapshot;
+    expect(snap.sourceFolderId).toBe("src");
+    expect(snap.instruction).toBe("sort it");
+    expect(snap.stopped).toBe(false);
+    expect(snap.results.map((r) => r.summary.id)).toEqual([1, 2, 3]);
+  });
+
+  it("restores the review phase from a snapshot on init", async () => {
+    const snapshot: ReviewSnapshot = {
+      sourceFolderId: "src",
+      instruction: "sort it",
+      stopped: false,
+      results: [{ summary: summary(1), decision: move("Acc/Archive") }],
+    };
+    const h = makeRunner({ loadReview: async () => snapshot });
+    await h.runner.init();
+    const state = h.runner.getState();
+    expect(state.phase).toBe("review");
+    expect(state.instruction).toBe("sort it");
+    expect(state.results.map((r) => r.summary.id)).toEqual([1]);
+    expect(state.resumable).toBeNull();
+  });
+
+  it("prefers a review snapshot over a resume checkpoint on init", async () => {
+    const snapshot: ReviewSnapshot = {
+      sourceFolderId: "src",
+      instruction: "review me",
+      stopped: false,
+      results: [{ summary: summary(1), decision: move("Acc/Archive") }],
+    };
+    const checkpoint: JobCheckpoint = {
+      sourceFolderId: "src",
+      instruction: "resume me",
+      decisions: [
+        { headerMessageId: "<msg-1@example.com>", decision: move("Acc/Archive") },
+      ],
+    };
+    const h = makeRunner({
+      loadReview: async () => snapshot,
+      loadCheckpoint: async () => checkpoint,
+    });
+    await h.runner.init();
+    expect(h.runner.getState().phase).toBe("review");
+    expect(h.runner.getState().resumable).toBeNull();
+  });
+
+  it("clears the review snapshot once an apply completes", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+    expect(h.clearReview).toHaveBeenCalled();
+  });
+
+  it("keeps the review snapshot when an apply fails back to review", async () => {
+    const h = makeRunner({
+      moveMessages: vi.fn(async () => {
+        throw new Error("move boom");
+      }),
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    h.clearReview.mockClear();
+    h.runner.apply([1]);
+    await waitFor(() => h.runner.getState().error !== null);
+    expect(h.runner.getState().phase).toBe("review");
+    expect(h.clearReview).not.toHaveBeenCalled();
+  });
+
+  it("clears the review snapshot when a fresh job starts", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    expect(h.clearReview).toHaveBeenCalled();
+    await waitFor(() => h.runner.getState().phase === "review");
+  });
+});
+
+describe("trimResultsForReview", () => {
+  it("drops body/headers/recipients but keeps the review-facing fields", () => {
+    const fat: ClassifiedMessage[] = [
+      {
+        summary: {
+          ...summary(1),
+          recipients: ["r@x"],
+          ccList: ["c@x"],
+          headers: { "X-Spam": "no" },
+          bodyExcerpt: "a very long body".repeat(500),
+        },
+        decision: move("Acc/Archive"),
+      },
+    ];
+    const trimmed = trimResultsForReview(fat);
+    expect(trimmed[0].summary.bodyExcerpt).toBe("");
+    expect(trimmed[0].summary.headers).toEqual({});
+    expect(trimmed[0].summary.recipients).toEqual([]);
+    expect(trimmed[0].summary.ccList).toEqual([]);
+    // Fields the review UI, apply, and report still read are preserved.
+    expect(trimmed[0].summary.id).toBe(1);
+    expect(trimmed[0].summary.subject).toBe("s1");
+    expect(trimmed[0].summary.author).toBe("a1");
+    expect(trimmed[0].summary.headerMessageId).toBe("<msg-1@example.com>");
+    expect(trimmed[0].decision.action).toBe("move");
+    // Pure: the input is not mutated.
+    expect(fat[0].summary.bodyExcerpt.length).toBeGreaterThan(0);
   });
 });
