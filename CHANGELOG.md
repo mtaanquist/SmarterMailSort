@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-19
+
+### Fixed
+- Folder picker is fixed properly. Enumeration now uses `folders.query({})`
+  (one flat call for all folders), with a fallback that calls
+  `getSubFolders(rootFolderId, true)` — the API takes a folder id **string**,
+  not a folder object, which is why earlier attempts returned nothing — and a
+  last-resort that exposes the root folder so the picker is never empty. The UI
+  also now reports *why* the picker is empty instead of failing silently.
+- Stopped the "closed conduit" console storm: the UI no longer reconnects its
+  background port on a timer (which thrashed the suspending event page).
+  It now connects lazily before each action, so a live job keeps the port
+  alive and idle suspension is quiet.
+
 ## [0.2.3] - 2026-06-19
 
 ### Fixed
@@ -71,7 +85,8 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...v0.2.1

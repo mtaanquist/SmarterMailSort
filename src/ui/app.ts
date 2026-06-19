@@ -45,6 +45,10 @@ function setError(message: string | null): void {
 
 async function loadFolders(): Promise<void> {
   const res = await send({ type: "listFolders" });
+  if (!res.ok) {
+    setError(`Could not load folders: ${"error" in res ? res.error : "unknown error"}`);
+    return;
+  }
   if (res.ok && "folders" in res) {
     folders = res.folders;
     el.folder.innerHTML = "";
@@ -184,6 +188,7 @@ function wireEvents(): void {
       setError("Enter an instruction first.");
       return;
     }
+    ensurePort(); // make sure progress updates stream for this run
     const res = await send({
       type: "startClassify",
       sourceFolderId: el.folder.value,
@@ -204,6 +209,7 @@ function wireEvents(): void {
       setError("No messages selected.");
       return;
     }
+    ensurePort(); // receive the applying/done state transitions
     const res = await send({ type: "applyMoves", messageIds: ids });
     if (!res.ok && "error" in res) setError(res.error);
   });
@@ -233,28 +239,38 @@ function applyStateEvent(incoming: JobState): void {
   render(incoming);
 }
 
-/** Connect to the background, reconnecting if its event page suspends. */
-function connectPort(): void {
-  const port = messenger.runtime.connect({ name: PORT_NAME });
-  port.onMessage.addListener((message) => {
-    const event = message as BgEvent;
-    if (event.type === "state") applyStateEvent(event.state);
-    else if (event.type === "progress" && lastState) {
-      lastState.progress = event.progress;
-      renderProgress(lastState);
-    }
+let port: browser.runtime.Port | null = null;
+
+function handlePortMessage(message: unknown): void {
+  const event = message as BgEvent;
+  if (event.type === "state") applyStateEvent(event.state);
+  else if (event.type === "progress" && lastState) {
+    lastState.progress = event.progress;
+    renderProgress(lastState);
+  }
+}
+
+/**
+ * Open the background port if one isn't already open. Deliberately does NOT
+ * auto-reconnect on disconnect — the MV3 event page suspends while idle, and a
+ * timer-based reconnect produces a "closed conduit" storm. Instead we reconnect
+ * lazily: `ensurePort()` is called before each user action, and a live job
+ * keeps the background (and the port) alive for the duration.
+ */
+function ensurePort(): void {
+  if (port) return;
+  const p = messenger.runtime.connect({ name: PORT_NAME });
+  p.onMessage.addListener(handlePortMessage);
+  p.onDisconnect.addListener(() => {
+    if (port === p) port = null;
   });
-  port.onDisconnect.addListener(() => {
-    // The MV3 background event page can suspend while idle, closing the port.
-    // Reconnect so progress/state updates recover on the next interaction.
-    window.setTimeout(connectPort, 1500);
-  });
+  port = p;
 }
 
 async function init(): Promise<void> {
   wireEvents();
   await loadFolders();
-  connectPort();
+  ensurePort();
 
   const res = await send({ type: "getState" });
   if (res.ok && "state" in res) applyStateEvent(res.state);

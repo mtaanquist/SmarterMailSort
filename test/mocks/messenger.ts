@@ -5,7 +5,7 @@ import { vi } from "vitest";
 
 export interface MockMessenger {
   accounts: { list: ReturnType<typeof vi.fn> };
-  folders: { getSubFolders: ReturnType<typeof vi.fn> };
+  folders: { getSubFolders: ReturnType<typeof vi.fn>; query: ReturnType<typeof vi.fn> };
   messages: {
     list: ReturnType<typeof vi.fn>;
     continueList: ReturnType<typeof vi.fn>;
@@ -23,7 +23,7 @@ export interface MockMessenger {
 export function installMockMessenger(): MockMessenger {
   const mock: MockMessenger = {
     accounts: { list: vi.fn() },
-    folders: { getSubFolders: vi.fn() },
+    folders: { getSubFolders: vi.fn(), query: vi.fn() },
     messages: {
       list: vi.fn(),
       continueList: vi.fn(),
