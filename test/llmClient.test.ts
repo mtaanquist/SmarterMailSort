@@ -3,6 +3,7 @@ import {
   chatCompletion,
   clearResponseFormatCache,
   LlmError,
+  resolveMaxTokens,
   testConnection,
 } from "../src/core/llmClient.js";
 import type { LlmConfig } from "../src/core/types.js";
@@ -12,6 +13,8 @@ const config: LlmConfig = {
   apiKey: "secret",
   model: "llama3.1",
   temperature: 0,
+  frequencyPenalty: 0,
+  maxTokens: 0,
   timeoutMs: 5000,
   responseFormat: "auto",
 };
@@ -243,6 +246,70 @@ describe("chatCompletion (response_format negotiation)", () => {
       jsonSchema: SCHEMA,
     });
     expect(bodyOf(fetchMock, 0).response_format).toBeUndefined();
+  });
+});
+
+describe("resolveMaxTokens", () => {
+  it("uses an explicit positive setting verbatim", () => {
+    expect(resolveMaxTokens(1500, 20)).toBe(1500);
+    expect(resolveMaxTokens(800, 1)).toBe(800);
+  });
+
+  it("scales automatically with batch size when the setting is 0", () => {
+    // overhead 200 + 200/email
+    expect(resolveMaxTokens(0, 1)).toBe(400);
+    expect(resolveMaxTokens(0, 20)).toBe(4200);
+  });
+
+  it("treats a non-positive or non-finite setting as automatic", () => {
+    expect(resolveMaxTokens(-5, 1)).toBe(400);
+    expect(resolveMaxTokens(NaN, 2)).toBe(600);
+  });
+
+  it("floors a fractional batch size to at least one email", () => {
+    expect(resolveMaxTokens(0, 0)).toBe(400);
+  });
+});
+
+describe("chatCompletion (sampling knobs)", () => {
+  it("sends max_tokens when a positive cap is given, omits it otherwise", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "{}" } }] }),
+    );
+    await chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+      maxTokens: 512,
+    });
+    expect(bodyOf(fetchMock, 0).max_tokens).toBe(512);
+
+    const fetchMock2 = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "{}" } }] }),
+    );
+    await chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock2, {
+      maxTokens: 0,
+    });
+    expect(bodyOf(fetchMock2, 0).max_tokens).toBeUndefined();
+  });
+
+  it("sends frequency_penalty only when non-zero", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "{}" } }] }),
+    );
+    await chatCompletion(
+      { ...config, frequencyPenalty: 0.3 },
+      [{ role: "user", content: "hi" }],
+      fetchMock,
+    );
+    expect(bodyOf(fetchMock, 0).frequency_penalty).toBe(0.3);
+
+    const fetchMock2 = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "{}" } }] }),
+    );
+    await chatCompletion(
+      { ...config, frequencyPenalty: 0 },
+      [{ role: "user", content: "hi" }],
+      fetchMock2,
+    );
+    expect(bodyOf(fetchMock2, 0).frequency_penalty).toBeUndefined();
   });
 });
 
