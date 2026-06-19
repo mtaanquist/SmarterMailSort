@@ -102,6 +102,23 @@ progress {
   color: #c0392b;
 }
 
+.review-controls {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+input[type="range"] {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
+
+#selected-count {
+  margin-left: auto;
+  font-weight: 600;
+}
+
 .folder-group {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -112,6 +129,13 @@ progress {
   cursor: pointer;
   padding: 0.5rem;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.group-count {
+  font-weight: 400;
 }
 
 .folder-group table {

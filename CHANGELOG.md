@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Review triage controls.** The proposed-changes screen now has **Select
+  all / none** (global and per-destination-folder), a live **"N of M
+  selected"** count (with per-folder counts), and a **minimum-confidence
+  slider** that checks only the moves at or above the chosen confidence. Makes
+  triaging large result sets far quicker. Pure UI — no API changes.
 - **Automatic retries with backoff** for transient LLM failures. Requests that
   hit HTTP 429 (rate limit), 5xx, a network error, or a timeout are now retried
   with exponential backoff (honouring a `Retry-After` header when the server
