@@ -38,9 +38,10 @@ npm run build      # produces dist/
 In Thunderbird: **Tools → Developer Tools → Debug Add-ons → Load Temporary
 Add-on…** and select `dist/manifest.json`.
 
-> Temporary add-ons are removed when Thunderbird restarts. Download a packaged
-> build from the [Releases](../../releases) page (a `.zip`, loadable the same
-> way) for something more persistent.
+> Temporary add-ons are removed when Thunderbird restarts. For a persistent
+> install, download the `.xpi` from the [Releases](../../releases) page and
+> follow **[INSTALL.md](INSTALL.md)** (which also covers the unsigned-add-on
+> signature setting).
 
 ## Configuration
 
