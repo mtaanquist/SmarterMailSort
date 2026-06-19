@@ -17,6 +17,7 @@ import type {
   FolderRef,
   JobCheckpoint,
   MessageSummary,
+  ReviewSnapshot,
   Settings,
   UndoItem,
   UndoOutcome,
@@ -33,6 +34,22 @@ const OMITTED_DECISION: Decision = {
 
 /** How many newly-decided messages to accumulate between checkpoint writes. */
 const DEFAULT_CHECKPOINT_EVERY = 25;
+
+/**
+ * Strip a results list down to the fields the review UI, apply, undo, and report
+ * actually read (subject/author/date/ids + the decision). Dropping `bodyExcerpt`
+ * and `headers` keeps a large folder's persisted review snapshot small — full
+ * bodies for tens of thousands of messages would otherwise blow the
+ * storage.local quota. Pure, so the trimming is unit-testable.
+ */
+export function trimResultsForReview(
+  results: ClassifiedMessage[],
+): ClassifiedMessage[] {
+  return results.map((r) => ({
+    ...r,
+    summary: { ...r.summary, recipients: [], ccList: [], headers: {}, bodyExcerpt: "" },
+  }));
+}
 
 /** Outcome of moving one destination group; mirrors `moveBatched`. */
 export interface MoveOutcome {
@@ -89,6 +106,12 @@ export interface JobRunnerDeps {
   saveCheckpoint: (checkpoint: JobCheckpoint) => Promise<void>;
   /** Forget the persisted checkpoint. */
   clearCheckpoint: () => Promise<void>;
+  /** Load any persisted review snapshot of a completed-but-unapplied run. */
+  loadReview: () => Promise<ReviewSnapshot | null>;
+  /** Persist the proposed moves awaiting review so they survive suspension. */
+  saveReview: (snapshot: ReviewSnapshot) => Promise<void>;
+  /** Forget the persisted review snapshot. */
+  clearReview: () => Promise<void>;
   /** Toggle a keepalive (e.g. an alarm) that resists event-page suspension. */
   setKeepalive: (active: boolean) => void;
   /** Sink for state/progress events (wired to port broadcast in production). */
@@ -157,16 +180,28 @@ export class JobRunner {
    * startup; emits state if anything loads.
    */
   async init(): Promise<void> {
-    const [undoRecord, checkpoint] = await Promise.all([
+    const [undoRecord, checkpoint, review] = await Promise.all([
       this.deps.loadUndo(),
       this.deps.loadCheckpoint(),
+      this.deps.loadReview(),
     ]);
     let changed = false;
     if (undoRecord && undoRecord.items.length) {
       this.setUndo(undoRecord);
       changed = true;
     }
-    if (checkpoint && checkpoint.decisions.length) {
+    // A review snapshot means classification finished but the moves weren't
+    // applied before the page went down: restore straight back into review so
+    // "Apply" works. It supersedes a stale resume checkpoint (cleared when the
+    // run reached review), so we never offer "resume" over a ready review.
+    if (review && review.results.length) {
+      this.state.phase = "review";
+      this.state.sourceFolderId = review.sourceFolderId;
+      this.state.instruction = review.instruction;
+      this.state.results = review.results;
+      this.state.stopped = review.stopped;
+      changed = true;
+    } else if (checkpoint && checkpoint.decisions.length) {
       this.loadedCheckpoint = checkpoint;
       this.setResumable({
         sourceFolderId: checkpoint.sourceFolderId,
@@ -195,6 +230,8 @@ export class JobRunner {
     this.loadedCheckpoint = null;
     this.allowCrossAccount = allowCrossAccount;
     void this.deps.clearCheckpoint();
+    // A new run replaces any moves that were sitting in review.
+    void this.deps.clearReview();
     this.beginRun(sourceFolderId, instruction);
     return { ok: true };
   }
@@ -209,6 +246,7 @@ export class JobRunner {
       checkpoint.decisions.map((d) => [d.headerMessageId, d.decision]),
     );
     this.allowCrossAccount = checkpoint.allowCrossAccount ?? false;
+    void this.deps.clearReview();
     this.beginRun(checkpoint.sourceFolderId, checkpoint.instruction);
     return { ok: true };
   }
@@ -320,6 +358,20 @@ export class JobRunner {
     if (checkpoint) await this.deps.saveCheckpoint(checkpoint);
   }
 
+  /** Persist (or, if there's nothing to review, clear) the review snapshot. */
+  private async persistReview(): Promise<void> {
+    if (!this.state.sourceFolderId || !this.state.results.length) {
+      await this.deps.clearReview();
+      return;
+    }
+    await this.deps.saveReview({
+      sourceFolderId: this.state.sourceFolderId,
+      instruction: this.state.instruction,
+      stopped: this.state.stopped,
+      results: trimResultsForReview(this.state.results),
+    });
+  }
+
   private async runJob(
     sourceFolderId: string,
     instruction: string,
@@ -371,12 +423,16 @@ export class JobRunner {
       this.state.results = results;
       this.state.stopped = signal.aborted;
       this.state.phase = "review";
-      // Classification finished; the checkpoint has served its purpose.
+      // Classification finished; the resume checkpoint has served its purpose.
+      // Hand the baton to a durable review snapshot so the proposed moves
+      // survive a suspension between here and "Apply" (otherwise they live only
+      // in memory and vanish with the event page).
       this.checkpointing = false;
       this.decided = new Map();
       this.loadedCheckpoint = null;
       this.setResumable(null);
       await this.deps.clearCheckpoint();
+      await this.persistReview();
     } catch (err) {
       this.state.error = (err as Error).message;
       this.state.phase = "idle";
@@ -479,8 +535,12 @@ export class JobRunner {
       }
       await this.recordUndo(undoItems);
 
+      // The moves are applied; the review snapshot must not linger or a later
+      // wake would restore "review" and offer to re-apply an already-done batch.
+      await this.deps.clearReview();
       this.state.phase = "done";
     } catch (err) {
+      // Stay in review (the snapshot is still valid) so the user can retry.
       this.state.error = (err as Error).message;
       this.state.phase = "review";
     } finally {

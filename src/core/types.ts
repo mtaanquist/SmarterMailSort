@@ -190,3 +190,19 @@ export interface JobCheckpoint {
   allowCrossAccount?: boolean;
   decisions: CheckpointDecision[];
 }
+
+/**
+ * Durable snapshot of a completed classification awaiting review, persisted so
+ * the proposed moves survive an event-page suspension between detection and
+ * apply (without it, the in-memory results vanish and "Apply" silently no-ops).
+ * Restored as the `review` phase on startup. The summaries are trimmed to the
+ * fields review/apply/undo/report actually use — `bodyExcerpt` and `headers` are
+ * dropped so a large folder's snapshot stays well under the storage.local quota.
+ */
+export interface ReviewSnapshot {
+  sourceFolderId: string;
+  instruction: string;
+  /** True when the classification was stopped early by the user. */
+  stopped: boolean;
+  results: ClassifiedMessage[];
+}
