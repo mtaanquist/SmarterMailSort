@@ -80,6 +80,30 @@ input[type="checkbox"] {
   min-width: 6rem;
 }
 
+.review-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.review-controls input[type="range"] {
+  display: inline-block;
+  width: auto;
+  margin-top: 0;
+}
+
+/* The per-folder select-all checkbox sits inline in the group header. */
+.folder-group summary .folder-select {
+  margin-right: 0.4rem;
+}
+
+.folder-count {
+  color: var(--muted, #888);
+  font-weight: 400;
+}
+
 button {
   padding: 0.45rem 0.9rem;
   font: inherit;

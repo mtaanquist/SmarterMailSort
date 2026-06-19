@@ -64,6 +64,24 @@
       <section class="panel" id="review-panel" hidden>
         <h2>Proposed changes</h2>
         <p id="review-summary" class="status"></p>
+        <div class="review-controls" id="review-controls" hidden>
+          <label class="inline">
+            <input type="checkbox" id="select-all" checked />
+            <span id="selected-count">0 of 0 selected</span>
+          </label>
+          <label class="inline">
+            Min confidence
+            <input
+              type="range"
+              id="confidence-threshold"
+              min="0"
+              max="1"
+              step="0.05"
+              value="0"
+            />
+            <span id="confidence-value">0.00</span>
+          </label>
+        </div>
         <div class="actions">
           <button id="apply" type="button">Apply selected moves</button>
           <button id="download" type="button">Download report</button>

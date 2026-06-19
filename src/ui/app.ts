@@ -37,6 +37,11 @@ const el = {
   undo: document.getElementById("undo") as HTMLButtonElement,
   reviewPanel: document.getElementById("review-panel") as HTMLElement,
   reviewSummary: document.getElementById("review-summary") as HTMLElement,
+  reviewControls: document.getElementById("review-controls") as HTMLElement,
+  selectAll: document.getElementById("select-all") as HTMLInputElement,
+  selectedCount: document.getElementById("selected-count") as HTMLElement,
+  confidenceThreshold: document.getElementById("confidence-threshold") as HTMLInputElement,
+  confidenceValue: document.getElementById("confidence-value") as HTMLElement,
   review: document.getElementById("review") as HTMLElement,
   apply: document.getElementById("apply") as HTMLButtonElement,
   download: document.getElementById("download") as HTMLButtonElement,
@@ -47,6 +52,8 @@ const el = {
 let folders: FolderNode[] = [];
 let presets: Preset[] = [];
 let lastState: JobState | null = null;
+/** Min confidence below which a proposed move is auto-deselected (0 = none). */
+let confidenceThreshold = 0;
 
 function send(request: UiRequest): Promise<UiResponse> {
   return messenger.runtime.sendMessage(request) as Promise<UiResponse>;
@@ -173,7 +180,43 @@ function renderReview(state: JobState): void {
   for (const [folder, items] of moves) {
     el.review.appendChild(renderFolderGroup(folder, items));
   }
-  el.apply.disabled = state.phase !== "review" || moveCount === 0;
+
+  // Bulk-selection controls only make sense while reviewing actual moves.
+  el.reviewControls.hidden = state.phase !== "review" || moveCount === 0;
+  el.confidenceThreshold.value = String(confidenceThreshold);
+  el.confidenceValue.textContent = confidenceThreshold.toFixed(2);
+  applyThreshold();
+  updateSelectionUi();
+}
+
+/** Deselect proposed moves whose confidence is below the chosen threshold. */
+function applyThreshold(): void {
+  for (const cb of el.review.querySelectorAll<HTMLInputElement>(".move-checkbox")) {
+    cb.checked = Number(cb.dataset.confidence) >= confidenceThreshold;
+  }
+}
+
+/** Refresh counts, the global/per-folder tri-state boxes, and the apply button. */
+function updateSelectionUi(): void {
+  const all = [...el.review.querySelectorAll<HTMLInputElement>(".move-checkbox")];
+  const checked = all.filter((c) => c.checked).length;
+  el.selectedCount.textContent = `${checked} of ${all.length} selected`;
+  el.selectAll.checked = all.length > 0 && checked === all.length;
+  el.selectAll.indeterminate = checked > 0 && checked < all.length;
+
+  for (const group of el.review.querySelectorAll<HTMLElement>(".folder-group")) {
+    const boxes = [...group.querySelectorAll<HTMLInputElement>(".move-checkbox")];
+    const sel = boxes.filter((b) => b.checked).length;
+    const folderBox = group.querySelector<HTMLInputElement>(".folder-select");
+    if (folderBox) {
+      folderBox.checked = boxes.length > 0 && sel === boxes.length;
+      folderBox.indeterminate = sel > 0 && sel < boxes.length;
+    }
+    const count = group.querySelector<HTMLElement>(".folder-count");
+    if (count) count.textContent = `(${sel}/${boxes.length})`;
+  }
+
+  el.apply.disabled = lastState?.phase !== "review" || checked === 0;
 }
 
 function renderFolderGroup(
@@ -185,7 +228,19 @@ function renderFolderGroup(
   details.open = true;
 
   const summary = document.createElement("summary");
-  summary.textContent = `→ ${folder} (${items.length})`;
+  const folderBox = document.createElement("input");
+  folderBox.type = "checkbox";
+  folderBox.checked = true;
+  folderBox.className = "folder-select";
+  folderBox.setAttribute("aria-label", `Select all in ${folder}`);
+  // A click inside <summary> would otherwise toggle the disclosure open/closed.
+  folderBox.addEventListener("click", (e) => e.stopPropagation());
+  const label = document.createElement("span");
+  label.textContent = `→ ${folder} `;
+  const count = document.createElement("span");
+  count.className = "folder-count";
+  count.textContent = `(${items.length}/${items.length})`;
+  summary.append(folderBox, label, count);
   details.appendChild(summary);
 
   const table = document.createElement("table");
@@ -197,6 +252,7 @@ function renderFolderGroup(
     checkbox.type = "checkbox";
     checkbox.checked = true;
     checkbox.dataset.messageId = String(item.summary.id);
+    checkbox.dataset.confidence = String(item.decision.confidence);
     checkbox.className = "move-checkbox";
     checkCell.appendChild(checkbox);
 
@@ -327,6 +383,33 @@ function wireEvents(): void {
     if (!(await persistPresets())) return;
     el.presetName.value = "";
     populatePresetSelect();
+  });
+
+  el.selectAll.addEventListener("change", () => {
+    for (const cb of el.review.querySelectorAll<HTMLInputElement>(".move-checkbox")) {
+      cb.checked = el.selectAll.checked;
+    }
+    updateSelectionUi();
+  });
+
+  el.confidenceThreshold.addEventListener("input", () => {
+    confidenceThreshold = Number(el.confidenceThreshold.value);
+    el.confidenceValue.textContent = confidenceThreshold.toFixed(2);
+    applyThreshold();
+    updateSelectionUi();
+  });
+
+  // Delegated: per-folder select-all toggles its group; any box change updates counts.
+  el.review.addEventListener("change", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.classList.contains("folder-select")) {
+      const group = target.closest(".folder-group");
+      const checked = (target as HTMLInputElement).checked;
+      group
+        ?.querySelectorAll<HTMLInputElement>(".move-checkbox")
+        .forEach((cb) => (cb.checked = checked));
+    }
+    updateSelectionUi();
   });
 
   el.apply.addEventListener("click", async () => {
