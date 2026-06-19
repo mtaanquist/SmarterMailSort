@@ -2,6 +2,7 @@
 // cross-origin host permission for the configured endpoint (must run from this
 // user-gesture context, not the background page).
 
+import { originMatchPattern } from "../core/endpoint.js";
 import type { UiRequest, UiResponse } from "../core/protocol.js";
 import type { Settings } from "../core/types.js";
 
@@ -44,23 +45,23 @@ function writeForm(s: Settings): void {
   $("concurrency").value = String(s.concurrency);
 }
 
-/** Request privileged cross-origin access to the endpoint host. */
+/**
+ * Request privileged cross-origin access to the endpoint host. Never throws —
+ * a bad URL or denied/failed request resolves to `false` so it can't abort the
+ * surrounding save. Must be invoked from a user gesture (the click handler).
+ */
 async function requestEndpointPermission(baseUrl: string): Promise<boolean> {
-  let origin: string;
-  try {
-    origin = `${new URL(baseUrl).origin}/*`;
-  } catch {
-    setStatus("Invalid base URL.", "err");
+  const origin = originMatchPattern(baseUrl);
+  if (!origin) {
+    setStatus("Invalid endpoint URL (must be http(s)).", "err");
     return false;
   }
-  const granted = await messenger.permissions.request({ origins: [origin] });
-  if (!granted) {
-    setStatus(
-      `Permission for ${origin} was not granted; requests may be blocked.`,
-      "err",
-    );
+  try {
+    return await messenger.permissions.request({ origins: [origin] });
+  } catch (err) {
+    setStatus(`Could not request host permission: ${(err as Error).message}`, "err");
+    return false;
   }
-  return granted;
 }
 
 async function init(): Promise<void> {
@@ -71,9 +72,18 @@ async function init(): Promise<void> {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const settings = readForm();
-    await requestEndpointPermission(settings.baseUrl);
+    // Start the permission request inside the user gesture, but don't let its
+    // outcome block or abort persisting the settings.
+    const permissionPromise = requestEndpointPermission(settings.baseUrl);
     const saved = await send({ type: "saveSettings", settings });
-    setStatus(saved.ok ? "Saved." : `Save failed: ${errorOf(saved)}`, saved.ok ? "ok" : "err");
+    const granted = await permissionPromise;
+    if (!saved.ok) {
+      setStatus(`Save failed: ${errorOf(saved)}`, "err");
+    } else if (!granted) {
+      setStatus("Saved, but host permission was not granted — requests may be blocked.", "ok");
+    } else {
+      setStatus("Saved.", "ok");
+    }
   });
 
   document.getElementById("test")!.addEventListener("click", async () => {
