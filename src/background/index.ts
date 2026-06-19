@@ -29,6 +29,9 @@ const state: JobState = {
 
 let abortController: AbortController | null = null;
 const ports = new Set<browser.runtime.Port>();
+// Id of our dedicated app tab, tracked so we can refocus it without needing
+// the broad "tabs" permission (querying tabs by URL requires it).
+let appTabId: number | undefined;
 
 function broadcast(event: BgEvent): void {
   for (const port of ports) {
@@ -51,13 +54,21 @@ function pushState(): void {
 async function openApp(folderId?: string): Promise<void> {
   const base = messenger.runtime.getURL("ui/app.html");
   const url = folderId ? `${base}?folder=${encodeURIComponent(folderId)}` : base;
-  // Match any existing app tab regardless of its query string.
-  const existing = await messenger.tabs.query({ url: `${base}*` });
-  if (existing.length && existing[0].id != null) {
-    await messenger.tabs.update(existing[0].id, { active: true, url });
-  } else {
-    await messenger.tabs.create({ url });
+
+  // Reuse the existing app tab if we still have one. tabs.get/update/create do
+  // not require the "tabs" permission (filtering by URL would).
+  if (appTabId !== undefined) {
+    try {
+      await messenger.tabs.get(appTabId);
+      await messenger.tabs.update(appTabId, { active: true, url });
+      return;
+    } catch {
+      appTabId = undefined; // the tab was closed since we last saw it
+    }
   }
+
+  const tab = await messenger.tabs.create({ url });
+  appTabId = tab.id ?? undefined;
 }
 
 const FOLDER_MENU_ID = "smartermailsort-sort-folder";
@@ -74,6 +85,11 @@ function registerEntryPoints(): void {
   } catch (err) {
     console.error("SmarterMailSort: failed to register toolbar button", err);
   }
+
+  // Forget the tracked tab once it closes, so the next open creates a fresh one.
+  messenger.tabs.onRemoved.addListener((tabId) => {
+    if (tabId === appTabId) appTabId = undefined;
+  });
 
   try {
     messenger.menus.onClicked.addListener((info) => {
