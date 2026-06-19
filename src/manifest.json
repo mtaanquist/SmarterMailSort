@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "SmarterMailSort",
+  "version": "0.1.0",
+  "description": "Sort mail folders with an OpenAI-compatible LLM using natural-language instructions.",
+  "author": "SmarterMailSort contributors",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "smartermailsort@taaken.dk",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "messagesRead",
+    "messagesMove",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "background": {
+    "scripts": ["background/index.js"]
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "browser_action": {
+    "default_title": "SmarterMailSort",
+    "default_icon": "icons/icon.svg"
+  },
+  "icons": {
+    "16": "icons/icon.svg",
+    "32": "icons/icon.svg",
+    "64": "icons/icon.svg",
+    "128": "icons/icon.svg"
+  }
+}

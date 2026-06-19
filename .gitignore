@@ -1,0 +1,8 @@
+node_modules/
+dist/
+web-ext-artifacts/
+*.log
+.DS_Store
+coverage/
+*.xpi
+*.zip

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SmarterMailSort — Settings</title>
+    <link rel="stylesheet" href="../ui/app.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>SmarterMailSort settings</h1>
+
+      <form id="settings-form">
+        <fieldset>
+          <legend>LLM endpoint</legend>
+
+          <label>
+            Base URL
+            <input id="baseUrl" type="url" placeholder="http://localhost:11434" required />
+          </label>
+          <p class="hint">
+            OpenAI-compatible base (Ollama, OpenWebUI, OpenAI). The
+            <code>/v1/chat/completions</code> path is appended automatically.
+          </p>
+
+          <label>
+            API key (optional)
+            <input id="apiKey" type="password" autocomplete="off" placeholder="sk-… or blank" />
+          </label>
+
+          <label>
+            Model
+            <input id="model" type="text" placeholder="llama3.1" required />
+          </label>
+
+          <label>
+            Temperature
+            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0" />
+          </label>
+
+          <label>
+            Request timeout (ms)
+            <input id="timeoutMs" type="number" min="1000" step="1000" value="60000" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Classification</legend>
+
+          <label>
+            Max body characters per email
+            <input id="maxBodyChars" type="number" min="0" step="100" value="2000" />
+          </label>
+
+          <label>
+            Concurrency (1 = strictly serial)
+            <input id="concurrency" type="number" min="1" max="16" step="1" value="1" />
+          </label>
+          <p class="hint">
+            Keep this at 1 for local models to avoid oversaturating the endpoint.
+          </p>
+        </fieldset>
+
+        <div class="actions">
+          <button type="submit" id="save">Save</button>
+          <button type="button" id="test">Test connection</button>
+        </div>
+
+        <p id="status" class="status" role="status"></p>
+      </form>
+
+      <details class="help">
+        <summary>Ollama / CORS note</summary>
+        <p>
+          Thunderbird grants this extension cross-origin access to the endpoint
+          host once you save (it requests permission for the origin you enter).
+          Ollama additionally rejects cross-origin requests unless started with
+          <code>OLLAMA_ORIGINS=*</code> (or your extension origin). OpenWebUI and
+          OpenAI need no extra configuration.
+        </p>
+      </details>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

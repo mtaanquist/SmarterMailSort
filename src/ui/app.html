@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SmarterMailSort</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>SmarterMailSort</h1>
+
+      <section class="panel">
+        <label>
+          Source folder
+          <select id="folder"></select>
+        </label>
+
+        <label>
+          Instruction
+          <textarea
+            id="instruction"
+            rows="3"
+            placeholder="e.g. move newsletters and notifications to the to_be_deleted folder"
+          ></textarea>
+        </label>
+
+        <div class="actions">
+          <button id="start" type="button">Classify</button>
+          <button id="abort" type="button" disabled>Stop</button>
+          <a id="settings-link" href="#">Settings</a>
+        </div>
+      </section>
+
+      <section class="panel" id="progress-panel" hidden>
+        <h2>Progress</h2>
+        <progress id="progress" max="100" value="0"></progress>
+        <p id="progress-text" class="status"></p>
+      </section>
+
+      <section class="panel" id="review-panel" hidden>
+        <h2>Proposed changes</h2>
+        <p id="review-summary" class="status"></p>
+        <div class="actions">
+          <button id="apply" type="button">Apply selected moves</button>
+          <button id="download" type="button">Download report</button>
+          <label class="inline">
+            <input type="checkbox" id="dry-run" />
+            Dry-run (don't move anything)
+          </label>
+        </div>
+        <div id="review"></div>
+      </section>
+
+      <p id="error" class="status err" role="alert" hidden></p>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
