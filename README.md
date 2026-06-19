@@ -14,8 +14,10 @@ until you review and approve** the proposed changes.
 
 1. **Configure** an OpenAI-compatible endpoint and model in the extension's
    settings.
-2. Open the **SmarterMailSort** tab (toolbar button), pick a **source folder**,
-   and type an instruction.
+2. Open the sort tab either from the **SmarterMailSort** toolbar button (then
+   pick a source folder), or by **right-clicking a folder → "Sort with
+   SmarterMailSort…"** to open it with that folder preselected. Type an
+   instruction.
 3. **Classify** — the extension pages through the folder, builds a small summary
    per message (from/to, subject, a few headers, first _N_ body characters) and
    asks the model whether to keep it or move it to one of your **existing**

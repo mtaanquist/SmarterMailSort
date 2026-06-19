@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-19
+
+### Added
+- **Right-click a folder → "Sort with SmarterMailSort…"** in the folder pane,
+  which opens the sort tab with that folder preselected (in addition to the
+  toolbar button). Adds the `menus` permission.
+
+### Fixed
+- Saving settings no longer blanks the form: the endpoint host permission was
+  built from a match pattern containing a port, which is invalid and threw,
+  aborting the save before settings were persisted.
+
 ## [0.1.0] - 2026-06-19
 
 Initial release.
@@ -27,5 +39,6 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mtaanquist/SmarterMailSort/releases/tag/v0.1.0

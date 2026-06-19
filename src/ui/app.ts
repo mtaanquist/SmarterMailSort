@@ -54,6 +54,12 @@ async function loadFolders(): Promise<void> {
       option.textContent = `${" ".repeat(node.depth * 2)}${node.path}`;
       el.folder.appendChild(option);
     }
+    // Preselect the folder passed via ?folder= (set when launched from the
+    // folder-pane context menu).
+    const requested = new URLSearchParams(location.search).get("folder");
+    if (requested && folders.some((f) => f.id === requested)) {
+      el.folder.value = requested;
+    }
   }
 }
 
