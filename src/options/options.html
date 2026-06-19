@@ -39,6 +39,29 @@
           </label>
 
           <label>
+            Frequency penalty
+            <input id="frequencyPenalty" type="number" min="-2" max="2" step="0.1" value="0.3" />
+          </label>
+          <p class="hint">
+            Standard OpenAI sampling penalty (-2 to 2). A small positive value
+            discourages the model from getting stuck repeating itself. Keep it
+            low — high values penalise the repeated structural tokens of valid
+            JSON (especially with batching) and can corrupt the output. 0 omits
+            it entirely.
+          </p>
+
+          <label>
+            Max response tokens (0 = automatic)
+            <input id="maxTokens" type="number" min="0" step="50" value="0" />
+          </label>
+          <p class="hint">
+            Caps how much the model may generate per request, so a runaway
+            response can't burn the whole timeout. "Automatic" scales the cap
+            with your batch size. Set a specific number only if you see decisions
+            being truncated.
+          </p>
+
+          <label>
             Request timeout (ms)
             <input id="timeoutMs" type="number" min="1000" step="1000" value="60000" />
           </label>

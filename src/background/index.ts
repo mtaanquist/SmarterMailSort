@@ -3,7 +3,7 @@
 // lifecycle to a JobRunner built from the platform + LLM dependencies.
 
 import { parseDecision, parseDecisions } from "../core/decisionParser.js";
-import { chatCompletion, type RetryInfo } from "../core/llmClient.js";
+import { chatCompletion, resolveMaxTokens, type RetryInfo } from "../core/llmClient.js";
 import { log, logError, warn } from "../core/log.js";
 import { JobRunner } from "../core/jobRunner.js";
 import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
@@ -250,6 +250,7 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
     const raw = await chatCompletion(settings, messages, fetch, {
       ...chatOptions,
       jsonSchema: DECISION_SCHEMA,
+      maxTokens: resolveMaxTokens(settings.maxTokens, 1),
     });
     return parseDecision(raw, allowedPaths);
   };
@@ -267,6 +268,7 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
     const raw = await chatCompletion(settings, messages, fetch, {
       ...chatOptions,
       jsonSchema: BATCH_DECISION_SCHEMA,
+      maxTokens: resolveMaxTokens(settings.maxTokens, summaries.length),
     });
     const byId = parseDecisions(
       raw,

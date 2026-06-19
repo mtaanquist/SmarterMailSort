@@ -29,6 +29,8 @@ function readForm(): Settings {
     apiKey: $("apiKey").value,
     model: $("model").value.trim(),
     temperature: Number($("temperature").value),
+    frequencyPenalty: Number($("frequencyPenalty").value),
+    maxTokens: Number($("maxTokens").value),
     timeoutMs: Number($("timeoutMs").value),
     responseFormat: $("responseFormat").value as ResponseFormat,
     maxBodyChars: Number($("maxBodyChars").value),
@@ -44,6 +46,8 @@ function writeForm(s: Settings): void {
   $("apiKey").value = s.apiKey;
   $("model").value = s.model;
   $("temperature").value = String(s.temperature);
+  $("frequencyPenalty").value = String(s.frequencyPenalty);
+  $("maxTokens").value = String(s.maxTokens);
   $("timeoutMs").value = String(s.timeoutMs);
   $("responseFormat").value = s.responseFormat;
   $("maxBodyChars").value = String(s.maxBodyChars);

@@ -60,6 +60,24 @@ const DEFAULT_RETRY_BASE_MS = 500;
 /** Cap a single backoff wait so a large Retry-After can't stall a run forever. */
 const MAX_BACKOFF_MS = 30_000;
 
+/** Automatic per-email and fixed-overhead token budgets (see resolveMaxTokens). */
+const AUTO_TOKENS_PER_EMAIL = 200;
+const AUTO_TOKENS_OVERHEAD = 200;
+
+/**
+ * Resolve the `max_tokens` cap for a request. An explicit positive `setting` is
+ * used verbatim (the user's override). `setting <= 0` means "automatic": a budget
+ * that scales with `batchSize`, so a single decision is tightly bounded while a
+ * large batch still has room for one object per email. Bounding the response is
+ * what stops a model that degenerates into a repetition loop from generating
+ * until the request times out.
+ */
+export function resolveMaxTokens(setting: number, batchSize: number): number {
+  if (Number.isFinite(setting) && setting > 0) return Math.floor(setting);
+  const n = Math.max(1, Math.floor(batchSize || 1));
+  return AUTO_TOKENS_OVERHEAD + n * AUTO_TOKENS_PER_EMAIL;
+}
+
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
@@ -115,6 +133,8 @@ export interface ChatOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Schema for the `json_schema` response_format (required to use that mode). */
   jsonSchema?: NamedSchema;
+  /** Resolved `max_tokens` cap for this request; omitted from the body when <= 0. */
+  maxTokens?: number;
 }
 
 /** Resolve the ordered list of response_format modes to try for a request. */
@@ -212,6 +232,15 @@ async function chatCompletionOnce(
     messages,
     stream: false,
   };
+  // Standard OpenAI sampling knobs. Both are omitted at their no-op default so
+  // quirky endpoints never see a field they don't need; both are portable across
+  // OpenAI-compatible servers (unlike top_k/repeat_penalty, which are not).
+  if (Number.isFinite(config.frequencyPenalty) && config.frequencyPenalty !== 0) {
+    body.frequency_penalty = config.frequencyPenalty;
+  }
+  if (options.maxTokens && options.maxTokens > 0) {
+    body.max_tokens = options.maxTokens;
+  }
   const responseFormat = buildResponseFormat(mode, options.jsonSchema);
   if (responseFormat) body.response_format = responseFormat;
 

@@ -23,6 +23,8 @@ const SETTINGS: Settings = {
   apiKey: "",
   model: "m",
   temperature: 0,
+  frequencyPenalty: 0,
+  maxTokens: 0,
   timeoutMs: 1000,
   responseFormat: "auto",
   maxBodyChars: 100,

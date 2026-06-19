@@ -18,6 +18,21 @@ export interface LlmConfig {
   model: string;
   /** Sampling temperature. Low values keep classification deterministic. */
   temperature: number;
+  /**
+   * OpenAI `frequency_penalty` (-2..2). A small positive value discourages a
+   * model from degenerating into a repetition loop (the failure mode where it
+   * rambles the same sentence until it exhausts the token budget). Keep it
+   * modest: high values penalise the structural tokens valid JSON repeats
+   * (especially in batch mode) and can corrupt the output. 0 omits the field.
+   */
+  frequencyPenalty: number;
+  /**
+   * Cap on response tokens (`max_tokens`). A classification decision is small,
+   * so bounding the response stops a runaway generation from running until the
+   * request times out. 0 means "automatic": a budget that scales with the batch
+   * size (see resolveMaxTokens). A positive value is sent verbatim.
+   */
+  maxTokens: number;
   /** Per-request timeout in milliseconds. */
   timeoutMs: number;
   /** How to request JSON output; "auto" negotiates per endpoint. */
@@ -50,6 +65,8 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKey: "",
   model: "llama3.1",
   temperature: 0,
+  frequencyPenalty: 0.3,
+  maxTokens: 0,
   timeoutMs: 60000,
   responseFormat: "auto",
   maxBodyChars: 2000,
