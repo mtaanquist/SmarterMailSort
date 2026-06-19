@@ -10,23 +10,17 @@ beforeEach(() => {
 afterEach(() => clearMockMessenger());
 
 describe("listFolderTree", () => {
-  it("flattens the account folder tree fetched via getSubFolders, with paths and depth", async () => {
-    mock.accounts.list.mockResolvedValue([
-      { id: "acc1", name: "Local Folders", rootFolder: { id: "root1", name: "" } },
-    ]);
-    // accounts.list returns the root without subfolders; the tree comes from
-    // getSubFolders(root, true).
-    mock.folders.getSubFolders.mockResolvedValue([
-      { id: "f-inbox", name: "Inbox" },
-      {
-        id: "f-archive",
-        name: "archive",
-        subFolders: [{ id: "f-2025", name: "2025" }],
-      },
+  it("flattens all folders from folders.query, deriving path and depth, skipping roots/virtual", async () => {
+    mock.accounts.list.mockResolvedValue([{ id: "acc1", name: "Local Folders" }]);
+    mock.folders.query.mockResolvedValue([
+      { id: "root1", accountId: "acc1", path: "/", isRoot: true },
+      { id: "f-inbox", accountId: "acc1", path: "/Inbox", name: "Inbox" },
+      { id: "f-archive", accountId: "acc1", path: "/archive", name: "archive" },
+      { id: "f-2025", accountId: "acc1", path: "/archive/2025", name: "2025" },
+      { id: "v1", accountId: "acc1", path: "/saved", name: "saved", isVirtual: true },
     ]);
 
     const nodes = await listFolderTree();
-    expect(mock.folders.getSubFolders).toHaveBeenCalled();
     expect(nodes.map((n) => n.path)).toEqual([
       "Local Folders/Inbox",
       "Local Folders/archive",
@@ -36,25 +30,29 @@ describe("listFolderTree", () => {
     expect(nodes.find((n) => n.path === "Local Folders/Inbox")?.id).toBe("f-inbox");
   });
 
-  it("falls back to the account's carried folders if getSubFolders fails", async () => {
+  it("falls back to getSubFolders(rootId, true) when query yields nothing", async () => {
     mock.accounts.list.mockResolvedValue([
-      {
-        id: "acc1",
-        name: "Local Folders",
-        rootFolder: { id: "root1", name: "", subFolders: [{ id: "f-inbox", name: "Inbox" }] },
-      },
+      { id: "acc1", name: "Local Folders", rootFolder: { id: "root1", name: "" } },
     ]);
-    mock.folders.getSubFolders.mockRejectedValue(new Error("nope"));
+    mock.folders.query.mockResolvedValue([]);
+    mock.folders.getSubFolders.mockResolvedValue([
+      { id: "f-inbox", name: "Inbox", subFolders: [{ id: "f-sub", name: "sub" }] },
+    ]);
 
     const nodes = await listFolderTree();
-    expect(nodes.map((n) => n.path)).toEqual(["Local Folders/Inbox"]);
+    // Passed the root folder id STRING, not an object.
+    expect(mock.folders.getSubFolders).toHaveBeenCalledWith("root1", true);
+    expect(nodes.map((n) => n.path)).toEqual([
+      "Local Folders/Inbox",
+      "Local Folders/Inbox/sub",
+    ]);
   });
 
   it("exposes the root folder as a last resort so the picker is never empty", async () => {
     mock.accounts.list.mockResolvedValue([
       { id: "acc1", name: "Local Folders", rootFolder: { id: "root1", name: "Inbox" } },
     ]);
-    // getSubFolders returns nothing and there are no inline subfolders.
+    mock.folders.query.mockRejectedValue(new Error("no query"));
     mock.folders.getSubFolders.mockResolvedValue([]);
 
     const nodes = await listFolderTree();

@@ -10,11 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.4] - 2026-06-19
 
 ### Fixed
-- Folder picker could be completely empty (regression in 0.2.3). Folder
-  enumeration now tries multiple `getSubFolders` argument shapes, degrades to
-  the account's inline folders, and finally exposes the root folder itself, so
-  the picker is never silently empty. Diagnostic warnings are logged if no
-  folders are found.
+- Folder picker is fixed properly. Enumeration now uses `folders.query({})`
+  (one flat call for all folders), with a fallback that calls
+  `getSubFolders(rootFolderId, true)` — the API takes a folder id **string**,
+  not a folder object, which is why earlier attempts returned nothing — and a
+  last-resort that exposes the root folder so the picker is never empty. The UI
+  also now reports *why* the picker is empty instead of failing silently.
+- Stopped the "closed conduit" console storm: the UI no longer reconnects its
+  background port on a timer (which thrashed the suspending event page).
+  It now connects lazily before each action, so a live job keeps the port
+  alive and idle suspension is quiet.
 
 ## [0.2.3] - 2026-06-19
 

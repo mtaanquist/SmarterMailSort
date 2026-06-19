@@ -10,6 +10,11 @@ type MailFolder = {
   id?: string;
   name?: string;
   path?: string;
+  accountId?: string;
+  isRoot?: boolean;
+  isVirtual?: boolean;
+  isUnified?: boolean;
+  isTag?: boolean;
   subFolders?: MailFolder[];
 };
 
@@ -41,54 +46,77 @@ function walk(
   }
 }
 
+/** Skip account roots and the special virtual/unified/tag folders. */
+function isSelectable(folder: MailFolder): boolean {
+  return !!folder.id && !folder.isRoot && !folder.isVirtual && !folder.isUnified && !folder.isTag;
+}
+
 /**
  * Enumerate every folder across all accounts as a flat, depth-tagged list.
  *
- * `accounts.list()` returns each account's root folder but does NOT populate
- * the nested `subFolders` tree (in MV3 subfolders are only included when
- * explicitly requested), so we fetch the hierarchy with
- * `folders.getSubFolders(...)`. Several argument shapes are tried for
- * resilience across Thunderbird versions, and we degrade to whatever the
- * account object already carried (and finally to the root folder itself) so
+ * Primary path: `folders.query({})` (TB 121+) returns every folder in one flat
+ * call. Fallback for older builds / failures: walk each account's root via
+ * `getSubFolders(rootFolderId, true)` — note the API takes a MailFolderId
+ * STRING, not a folder object. As a last resort the root folder is exposed so
  * the picker is never silently empty.
  */
-type GetSubFoldersArg = Parameters<typeof messenger.folders.getSubFolders>[0];
-
-async function fetchTopFolders(account: MailAccount): Promise<MailFolder[]> {
-  const root = account.rootFolder;
-  // Try the documented argument shapes in order; the account object and its
-  // root folder are both accepted by getSubFolders depending on version.
-  const candidates: GetSubFoldersArg[] = [
-    account as unknown as GetSubFoldersArg,
-    ...(root ? [root as unknown as GetSubFoldersArg] : []),
-  ];
-  for (const arg of candidates) {
-    try {
-      const result = (await messenger.folders.getSubFolders(
-        arg,
-        true,
-      )) as unknown as MailFolder[];
-      if (Array.isArray(result) && result.length) return result;
-    } catch (err) {
-      console.warn("SmarterMailSort: getSubFolders failed", err);
-    }
+async function listViaQuery(
+  accountNames: Map<string, string>,
+): Promise<FolderNode[]> {
+  const all = (await messenger.folders.query({})) as unknown as MailFolder[];
+  const out: FolderNode[] = [];
+  for (const folder of all) {
+    if (!isSelectable(folder)) continue;
+    const accountName =
+      (folder.accountId && accountNames.get(folder.accountId)) || folder.accountId || "";
+    const rel = (folder.path ?? "").replace(/^\/+/, "");
+    const depth = rel ? rel.split("/").length - 1 : 0;
+    out.push({
+      id: folder.id!,
+      path: `${accountName}/${rel || (folder.name ?? "(folder)")}`,
+      depth,
+      accountName,
+    });
   }
-  // Degrade to inline folders, or finally the root itself, so the account is
-  // still selectable rather than showing an empty picker.
-  const inline = root?.subFolders ?? account.folders ?? [];
-  if (inline.length) return inline;
-  return root ? [root] : [];
+  return out;
 }
 
-export async function listFolderTree(): Promise<FolderNode[]> {
-  const accounts = (await messenger.accounts.list()) as unknown as MailAccount[];
+async function listViaWalk(accounts: MailAccount[]): Promise<FolderNode[]> {
   const out: FolderNode[] = [];
   for (const account of accounts) {
-    const tops = await fetchTopFolders(account);
+    const root = account.rootFolder;
+    let tops: MailFolder[] = [];
+    if (root?.id) {
+      try {
+        // getSubFolders takes a MailFolderId string, not a folder object.
+        tops = (await messenger.folders.getSubFolders(
+          root.id,
+          true,
+        )) as unknown as MailFolder[];
+      } catch (err) {
+        console.warn("SmarterMailSort: getSubFolders failed", err);
+      }
+    }
+    if (!tops.length) tops = root?.subFolders ?? account.folders ?? (root ? [root] : []);
     for (const top of tops) {
       walk(top, account.name, account.id, account.name, 0, out);
     }
   }
+  return out;
+}
+
+export async function listFolderTree(): Promise<FolderNode[]> {
+  const accounts = (await messenger.accounts.list()) as unknown as MailAccount[];
+  const accountNames = new Map(accounts.map((a) => [a.id, a.name]));
+
+  try {
+    const viaQuery = await listViaQuery(accountNames);
+    if (viaQuery.length) return viaQuery;
+  } catch (err) {
+    console.warn("SmarterMailSort: folders.query failed, falling back", err);
+  }
+
+  const out = await listViaWalk(accounts);
   if (!out.length) {
     console.warn("SmarterMailSort: no folders found across", accounts.length, "account(s)");
   }
