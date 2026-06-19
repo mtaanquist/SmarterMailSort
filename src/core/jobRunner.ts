@@ -92,6 +92,15 @@ export interface JobRunnerDeps {
   createClassifiers: (ctx: ClassifierContext) => Classifiers;
   /** Apply moves grouped by destination folder id. */
   moveMessages: (byFolderId: Map<string, number[]>) => Promise<MoveOutcome[]>;
+  /**
+   * Re-resolve the current numeric ids of messages (by their move-stable RFC
+   * Message-ID) within a folder. Used to recover a review restored from a
+   * snapshot after a restart, where the stored numeric ids may be stale.
+   */
+  resolveCurrentIds: (
+    folderId: string,
+    headerMessageIds: string[],
+  ) => Promise<Map<string, number>>;
   /** Reverse a previously-applied batch (move each message back to source). */
   undoMoves: (record: UndoRecord) => Promise<UndoOutcome>;
   /** Load any persisted undo record (e.g. after an event-page restart). */
@@ -165,6 +174,12 @@ export class JobRunner {
   private loadedCheckpoint: JobCheckpoint | null = null;
   /** Whether the active run may move messages into other accounts. */
   private allowCrossAccount = false;
+  /**
+   * True when the current review was restored from a persisted snapshot (vs.
+   * produced live this session). A restart can invalidate the snapshot's numeric
+   * ids, so apply re-resolves them by Message-ID; live reviews skip that cost.
+   */
+  private restoredReview = false;
   private readonly checkpointEvery: number;
 
   constructor(
@@ -200,6 +215,9 @@ export class JobRunner {
       this.state.instruction = review.instruction;
       this.state.results = review.results;
       this.state.stopped = review.stopped;
+      // Ids in the snapshot may be stale (e.g. after a restart); apply will
+      // re-resolve them by Message-ID.
+      this.restoredReview = true;
       changed = true;
     } else if (checkpoint && checkpoint.decisions.length) {
       this.loadedCheckpoint = checkpoint;
@@ -282,6 +300,8 @@ export class JobRunner {
     void this.deps.clearUndo();
     this.checkpointing = true;
     this.dirty = 0;
+    // This run produces a live review, not one restored from a snapshot.
+    this.restoredReview = false;
     this.emitState();
 
     this.abortController = new AbortController();
@@ -490,23 +510,67 @@ export class JobRunner {
     }
   }
 
+  /**
+   * Resolve the function that maps each selected move to the numeric id to move.
+   * Live reviews use the stored id directly; a review restored from a snapshot
+   * re-resolves ids by Message-ID (a restart can invalidate them), returning
+   * null for any message that no longer exists in the source folder.
+   */
+  private async resolveApplyIds(
+    moves: ClassifiedMessage[],
+  ): Promise<(item: ClassifiedMessage) => number | null> {
+    if (!this.restoredReview || !this.state.sourceFolderId) {
+      return (item) => item.summary.id;
+    }
+    const headerIds = moves
+      .map((m) => m.summary.headerMessageId)
+      .filter((h) => h.length > 0);
+    const idMap = await this.deps.resolveCurrentIds(
+      this.state.sourceFolderId,
+      headerIds,
+    );
+    return (item) =>
+      item.summary.headerMessageId
+        ? idMap.get(item.summary.headerMessageId) ?? null
+        : null;
+  }
+
   private async runApply(messageIds: number[]): Promise<void> {
     try {
       const nodes = await this.deps.listFolders();
       const { byPath } = this.deps.toFolderIndex(nodes);
       const selected = new Set(messageIds);
 
-      // Group the still-selected move decisions by destination folder id, and in
-      // parallel capture move-stable header ids per destination for a later undo.
+      // The selected move decisions whose destination folder still exists.
+      const moves = this.state.results.filter(
+        (item) =>
+          item.decision.action === "move" &&
+          item.decision.folder !== null &&
+          selected.has(item.summary.id) &&
+          byPath.has(item.decision.folder),
+      );
+
+      // A review restored from a snapshot may carry numeric ids a restart has
+      // invalidated, so re-resolve each selected message's CURRENT id from its
+      // move-stable Message-ID before moving. Any that no longer resolve were
+      // moved/deleted since and get skipped (reported below). Live reviews this
+      // session keep their ids and skip the lookup entirely.
+      const currentId = await this.resolveApplyIds(moves);
+
+      // Group the moves by destination folder id, and in parallel capture
+      // move-stable header ids per destination for a later undo.
       const byFolderId = new Map<string, number[]>();
       const undoByFolderId = new Map<string, UndoItem[]>();
-      for (const item of this.state.results) {
-        if (item.decision.action !== "move" || !item.decision.folder) continue;
-        if (!selected.has(item.summary.id)) continue;
-        const node = byPath.get(item.decision.folder);
-        if (!node) continue;
+      let skipped = 0;
+      for (const item of moves) {
+        const node = byPath.get(item.decision.folder!)!;
+        const id = currentId(item);
+        if (id === null) {
+          skipped++;
+          continue;
+        }
         const list = byFolderId.get(node.id) ?? [];
-        list.push(item.summary.id);
+        list.push(id);
         byFolderId.set(node.id, list);
         // Only messages with a Message-ID can be reliably located for undo.
         if (item.summary.headerMessageId) {
@@ -521,11 +585,20 @@ export class JobRunner {
 
       const outcomes = await this.deps.moveMessages(byFolderId);
       const failed = outcomes.filter((o) => o.error);
+      const notes: string[] = [];
       if (failed.length) {
-        this.state.error = `Some moves failed: ${failed
-          .map((f) => `${f.folderId}: ${f.error}`)
-          .join("; ")}`;
+        notes.push(
+          `Some moves failed: ${failed
+            .map((f) => `${f.folderId}: ${f.error}`)
+            .join("; ")}`,
+        );
       }
+      if (skipped) {
+        notes.push(
+          `${skipped} message(s) were not found (moved or deleted since) and were skipped.`,
+        );
+      }
+      this.state.error = notes.length ? notes.join(" ") : null;
 
       // Build the undo record from the destinations that moved successfully.
       const failedFolders = new Set(failed.map((f) => f.folderId));

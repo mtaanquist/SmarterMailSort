@@ -81,6 +81,7 @@ interface Harness {
   /** Message ids actually sent to the (LLM) classifier, to prove cache skips. */
   classifyCalls: number[];
   moveMessages: ReturnType<typeof vi.fn>;
+  resolveCurrentIds: ReturnType<typeof vi.fn>;
   undoMoves: ReturnType<typeof vi.fn>;
   saveUndo: ReturnType<typeof vi.fn>;
   clearUndo: ReturnType<typeof vi.fn>;
@@ -104,6 +105,7 @@ function makeRunner(
     capturedCtx: null,
     classifyCalls: [],
     moveMessages: vi.fn(async (): Promise<MoveOutcome[]> => []),
+    resolveCurrentIds: vi.fn(async () => new Map<string, number>()),
     undoMoves: vi.fn(
       async (): Promise<UndoOutcome> => ({ restored: 0, failures: [] }),
     ),
@@ -138,6 +140,7 @@ function makeRunner(
       };
     },
     moveMessages: harness.moveMessages,
+    resolveCurrentIds: harness.resolveCurrentIds,
     undoMoves: harness.undoMoves,
     loadUndo: async () => null,
     saveUndo: harness.saveUndo,
@@ -665,6 +668,84 @@ describe("JobRunner review snapshot", () => {
     h.runner.start("src", "x");
     expect(h.clearReview).toHaveBeenCalled();
     await waitFor(() => h.runner.getState().phase === "review");
+  });
+});
+
+describe("JobRunner apply after restart", () => {
+  function restoredReview(): Harness {
+    const snapshot: ReviewSnapshot = {
+      sourceFolderId: "src",
+      instruction: "x",
+      stopped: false,
+      results: [
+        { summary: summary(1), decision: move("Acc/Archive") },
+        { summary: summary(3), decision: move("Acc/Finance") },
+      ],
+    };
+    return makeRunner({ loadReview: async () => snapshot });
+  }
+
+  it("does not re-resolve ids for a live (same-session) review", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    expect(h.resolveCurrentIds).not.toHaveBeenCalled();
+    const byFolderId = h.moveMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(byFolderId.get("fA")).toEqual([1]); // stored id used as-is
+    expect(byFolderId.get("fB")).toEqual([3]);
+  });
+
+  it("re-resolves stale ids by Message-ID when applying a restored review", async () => {
+    const h = restoredReview();
+    h.resolveCurrentIds.mockResolvedValue(
+      new Map([
+        ["<msg-1@example.com>", 101],
+        ["<msg-3@example.com>", 103],
+      ]),
+    );
+    await h.runner.init();
+    expect(h.runner.getState().phase).toBe("review");
+
+    h.runner.apply([1, 3]); // UI selects the snapshot's (stale) stored ids
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    // The source folder was scanned for exactly the selected messages' Msg-IDs.
+    expect(h.resolveCurrentIds).toHaveBeenCalledWith("src", [
+      "<msg-1@example.com>",
+      "<msg-3@example.com>",
+    ]);
+    // The move used the freshly-resolved ids, not the stale stored ones.
+    const byFolderId = h.moveMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(byFolderId.get("fA")).toEqual([101]);
+    expect(byFolderId.get("fB")).toEqual([103]);
+    // Undo still keys off the move-stable Message-ID.
+    const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
+    expect(record.items.map((i) => i.headerMessageId)).toEqual([
+      "<msg-1@example.com>",
+      "<msg-3@example.com>",
+    ]);
+  });
+
+  it("skips messages that no longer resolve and reports them", async () => {
+    const h = restoredReview();
+    // Only msg-1 still exists; msg-3 was moved/deleted since the restart.
+    h.resolveCurrentIds.mockResolvedValue(new Map([["<msg-1@example.com>", 101]]));
+    await h.runner.init();
+    h.runner.apply([1, 3]);
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    const byFolderId = h.moveMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(byFolderId.get("fA")).toEqual([101]);
+    expect(byFolderId.has("fB")).toBe(false); // msg-3 skipped
+    expect(h.runner.getState().error).toContain("1 message(s) were not found");
+    // The skipped message is not in the undo record.
+    const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
+    expect(record.items.map((i) => i.headerMessageId)).toEqual([
+      "<msg-1@example.com>",
+    ]);
   });
 });
 

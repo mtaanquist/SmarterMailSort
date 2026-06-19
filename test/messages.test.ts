@@ -3,6 +3,7 @@ import {
   iterateFolderHeaders,
   moveBackByHeaderId,
   moveBatched,
+  resolveCurrentIds,
 } from "../src/platform/messages.js";
 import { clearMockMessenger, installMockMessenger, type MockMessenger } from "./mocks/messenger.js";
 
@@ -67,6 +68,40 @@ describe("moveBatched", () => {
     const results = await moveBatched(new Map([["folderA", []]]));
     expect(results).toEqual([]);
     expect(mock.messages.move).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveCurrentIds", () => {
+  it("maps requested Message-IDs to current numeric ids by scanning the folder", async () => {
+    mock.messages.list.mockResolvedValue({
+      id: null,
+      messages: [
+        { id: 11, headerMessageId: "<a>" },
+        { id: 12, headerMessageId: "<b>" },
+        { id: 13, headerMessageId: "<c>" },
+      ],
+    });
+    const map = await resolveCurrentIds("src", ["<a>", "<c>"]);
+    expect(map.get("<a>")).toBe(11);
+    expect(map.get("<c>")).toBe(13);
+    expect(map.has("<b>")).toBe(false); // present but not requested
+  });
+
+  it("omits Message-IDs that are no longer in the folder", async () => {
+    mock.messages.list.mockResolvedValue({
+      id: null,
+      messages: [{ id: 11, headerMessageId: "<a>" }],
+    });
+    const map = await resolveCurrentIds("src", ["<a>", "<gone>"]);
+    expect(map.get("<a>")).toBe(11);
+    expect(map.has("<gone>")).toBe(false);
+    expect(map.size).toBe(1);
+  });
+
+  it("returns an empty map without scanning when nothing is requested", async () => {
+    const map = await resolveCurrentIds("src", []);
+    expect(map.size).toBe(0);
+    expect(mock.messages.list).not.toHaveBeenCalled();
   });
 });
 
