@@ -140,6 +140,8 @@ export class JobRunner {
   private checkpointing = false;
   /** The interrupted checkpoint loaded at startup, available to resume. */
   private loadedCheckpoint: JobCheckpoint | null = null;
+  /** Whether the active run may move messages into other accounts. */
+  private allowCrossAccount = false;
   private readonly checkpointEvery: number;
 
   constructor(
@@ -182,11 +184,16 @@ export class JobRunner {
   }
 
   /** Begin classifying `sourceFolderId`. Rejected if a job is already running. */
-  start(sourceFolderId: string, instruction: string): JobActionResult {
+  start(
+    sourceFolderId: string,
+    instruction: string,
+    allowCrossAccount = false,
+  ): JobActionResult {
     if (this.isBusy()) return { ok: false, error: "a job is already running" };
     // A fresh run starts with no cached decisions and drops any stale checkpoint.
     this.decided = new Map();
     this.loadedCheckpoint = null;
+    this.allowCrossAccount = allowCrossAccount;
     void this.deps.clearCheckpoint();
     this.beginRun(sourceFolderId, instruction);
     return { ok: true };
@@ -201,6 +208,7 @@ export class JobRunner {
     this.decided = new Map(
       checkpoint.decisions.map((d) => [d.headerMessageId, d.decision]),
     );
+    this.allowCrossAccount = checkpoint.allowCrossAccount ?? false;
     this.beginRun(checkpoint.sourceFolderId, checkpoint.instruction);
     return { ok: true };
   }
@@ -297,6 +305,7 @@ export class JobRunner {
     return {
       sourceFolderId: this.state.sourceFolderId,
       instruction: this.state.instruction,
+      allowCrossAccount: this.allowCrossAccount,
       decisions: [...this.decided].map(([headerMessageId, decision]) => ({
         headerMessageId,
         decision,
@@ -328,7 +337,7 @@ export class JobRunner {
       // decision can never name an out-of-scope or non-existent folder.
       const sourceAccount = nodes.find((n) => n.id === sourceFolderId)?.accountName;
       const sameAccount = (n: FolderNode): boolean =>
-        settings.allowCrossAccount ||
+        this.allowCrossAccount ||
         sourceAccount === undefined ||
         n.accountName === sourceAccount;
       const targets: FolderRef[] = nodes
