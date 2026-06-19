@@ -22,6 +22,7 @@ import {
   iterateFolderHeaders,
   moveBackByHeaderId,
   moveBatched,
+  resolveCurrentIds,
 } from "../platform/messages.js";
 import { loadSettings, saveSettings } from "../platform/settings.js";
 import { clearUndo, loadUndo, saveUndo } from "../platform/undoStore.js";
@@ -298,6 +299,7 @@ const runner = new JobRunner({
   summarise,
   createClassifiers,
   moveMessages: moveBatched,
+  resolveCurrentIds,
   undoMoves: moveBackByHeaderId,
   loadUndo,
   saveUndo,

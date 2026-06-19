@@ -77,6 +77,30 @@ async function findIdsByHeaderId(
 }
 
 /**
+ * Map move-stable RFC Message-ID -> current numeric id for the requested
+ * messages, by scanning the folder once. Used to recover a review restored from
+ * a snapshot after a Thunderbird restart, where the stored numeric ids may be
+ * stale (they no more survive a restart than a move does). Only ids still
+ * present in the folder appear in the map; the rest were moved/deleted since.
+ */
+export async function resolveCurrentIds(
+  folderId: string,
+  headerMessageIds: string[],
+): Promise<Map<string, number>> {
+  const wanted = new Set(headerMessageIds);
+  const found = new Map<string, number>();
+  if (wanted.size === 0) return found;
+  for await (const header of iterateFolderHeaders(folderId)) {
+    const hmid = header.headerMessageId;
+    if (hmid && wanted.has(hmid) && !found.has(hmid)) {
+      found.set(hmid, header.id);
+      if (found.size === wanted.size) break;
+    }
+  }
+  return found;
+}
+
+/**
  * Reverse a previously-applied batch: for each moved message, re-locate it in
  * the folder it was moved into (by RFC Message-ID, since numeric ids don't
  * survive a move) and move it back to the original source folder. Reports any
