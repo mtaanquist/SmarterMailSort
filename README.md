@@ -57,6 +57,7 @@ Open the extension's settings (the **Settings** link in the tab, or
 | API key | Optional; sent only to your configured endpoint. |
 | Model | e.g. `llama3.1`, `gpt-4o-mini`. |
 | Temperature | `0` recommended for consistent classification. |
+| Max retries on transient errors | Retries 429/5xx/network/timeout failures with exponential backoff (honours `Retry-After`). Default `2`; `0` disables. |
 | Max body characters | How much body text the model sees per email. |
 | Concurrency | `1` (serial) recommended for local models. |
 | Emails per request | Batch size — classify several emails per LLM request. `1` keeps one request per email; higher values (≈10–20) are much faster on large folders if your model returns reliable JSON. |

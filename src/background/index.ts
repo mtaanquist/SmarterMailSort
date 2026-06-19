@@ -166,6 +166,11 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
       signal,
+      maxRetries: settings.maxRetries,
+      onRetry: (info) =>
+        console.warn(
+          `SmarterMailSort: retry ${info.attempt} in ${info.delayMs}ms (${info.reason})`,
+        ),
     });
     return parseDecision(raw, allowedPaths);
   };
@@ -183,6 +188,11 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
       signal,
+      maxRetries: settings.maxRetries,
+      onRetry: (info) =>
+        console.warn(
+          `SmarterMailSort: retry ${info.attempt} in ${info.delayMs}ms (${info.reason})`,
+        ),
     });
     const byId = parseDecisions(
       raw,
