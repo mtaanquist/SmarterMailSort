@@ -1,37 +1,22 @@
-// Background event page: owns the job state machine, runs classification, and
-// brokers requests/progress between the UI tab and the platform + LLM layers.
+// Background event page: thin wiring layer. It owns the entry points (toolbar
+// button, folder menu, app tab) and the UI port plumbing, and delegates the job
+// lifecycle to a JobRunner built from the platform + LLM dependencies.
 
-import { runClassification } from "../core/classifier.js";
 import { parseDecision, parseDecisions } from "../core/decisionParser.js";
 import { chatCompletion } from "../core/llmClient.js";
+import { JobRunner } from "../core/jobRunner.js";
+import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
 import {
   buildBatchClassificationMessages,
   buildClassificationMessages,
 } from "../core/promptBuilder.js";
-import {
-  PORT_NAME,
-  type BgEvent,
-  type JobState,
-  type UiRequest,
-  type UiResponse,
-} from "../core/protocol.js";
+import { PORT_NAME, type BgEvent, type UiRequest, type UiResponse } from "../core/protocol.js";
 import { testConnection } from "../core/llmClient.js";
-import type { Decision, FolderNode, MessageSummary } from "../core/types.js";
+import type { Decision, MessageSummary } from "../core/types.js";
 import { listFolderTree, toFolderIndex } from "../platform/folders.js";
 import { getSummary, iterateFolderHeaders, moveBatched } from "../platform/messages.js";
 import { loadSettings, saveSettings } from "../platform/settings.js";
 
-const state: JobState = {
-  phase: "idle",
-  sourceFolderId: null,
-  instruction: "",
-  progress: null,
-  results: [],
-  error: null,
-  stopped: false,
-};
-
-let abortController: AbortController | null = null;
 const ports = new Set<browser.runtime.Port>();
 // Id of our dedicated app tab, tracked so we can refocus it without needing
 // the broad "tabs" permission (querying tabs by URL requires it).
@@ -45,10 +30,6 @@ function broadcast(event: BgEvent): void {
       ports.delete(port);
     }
   }
-}
-
-function pushState(): void {
-  broadcast({ type: "state", state });
 }
 
 /**
@@ -138,31 +119,16 @@ async function* summarise(
   }
 }
 
-async function runJob(sourceFolderId: string, instruction: string): Promise<void> {
-  state.phase = "classifying";
-  state.sourceFolderId = sourceFolderId;
-  state.instruction = instruction;
-  state.results = [];
-  state.error = null;
-  state.stopped = false;
-  state.progress = { processed: 0, total: null };
-  pushState();
-
-  abortController = new AbortController();
-  const { signal } = abortController;
-  const settings = await loadSettings();
-  const nodes = await listFolderTree();
-  const { allowedPaths } = toFolderIndex(nodes);
-
-  // The source folder itself is not a useful move target; remove it.
-  const sourcePath = nodes.find((n) => n.id === sourceFolderId)?.path;
-  const targets = nodes.filter((n) => n.id !== sourceFolderId);
-  if (sourcePath) allowedPaths.delete(sourcePath);
-
-  const folderRefs = targets.map((n) => ({ id: n.id, path: n.path }));
+/**
+ * Build the LLM-backed classify functions for a run. This is the one piece of
+ * job orchestration that genuinely needs the LLM client + prompt builders, so
+ * it stays here and is handed to the JobRunner as an injected dependency.
+ */
+function createClassifiers(ctx: ClassifierContext): Classifiers {
+  const { instruction, settings, targets, allowedPaths, signal } = ctx;
 
   const classify = async (summary: MessageSummary): Promise<Decision> => {
-    const messages = buildClassificationMessages(instruction, folderRefs, summary);
+    const messages = buildClassificationMessages(instruction, targets, summary);
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
       signal,
@@ -177,7 +143,7 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
   ): Promise<Decision[]> => {
     const messages = buildBatchClassificationMessages(
       instruction,
-      folderRefs,
+      targets,
       summaries,
     );
     const raw = await chatCompletion(settings, messages, fetch, {
@@ -200,73 +166,23 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     );
   };
 
-  try {
-    const results = await runClassification({
-      source: summarise(sourceFolderId, settings.maxBodyChars),
-      classify,
-      classifyBatch,
-      concurrency: settings.concurrency,
-      batchSize: settings.batchSize,
-      signal,
-      onProgress: (progress) => {
-        state.progress = progress;
-        broadcast({ type: "progress", progress });
-      },
-    });
-    state.results = results;
-    state.stopped = signal.aborted;
-    state.phase = "review";
-  } catch (err) {
-    state.error = (err as Error).message;
-    state.phase = "idle";
-  } finally {
-    abortController = null;
-    pushState();
-  }
+  return { classify, classifyBatch };
 }
 
-async function applyMoves(messageIds: number[]): Promise<void> {
-  state.phase = "applying";
-  state.error = null;
-  pushState();
-
-  const nodes = await listFolderTree();
-  const { byPath } = toFolderIndex(nodes);
-  const selected = new Set(messageIds);
-
-  // Group the still-selected move decisions by destination folder id.
-  const byFolderId = new Map<string, number[]>();
-  for (const item of state.results) {
-    if (item.decision.action !== "move" || !item.decision.folder) continue;
-    if (!selected.has(item.summary.id)) continue;
-    const node: FolderNode | undefined = byPath.get(item.decision.folder);
-    if (!node) continue;
-    const list = byFolderId.get(node.id) ?? [];
-    list.push(item.summary.id);
-    byFolderId.set(node.id, list);
-  }
-
-  try {
-    const outcomes = await moveBatched(byFolderId);
-    const failed = outcomes.filter((o) => o.error);
-    if (failed.length) {
-      state.error = `Some moves failed: ${failed
-        .map((f) => `${f.folderId}: ${f.error}`)
-        .join("; ")}`;
-    }
-    state.phase = "done";
-  } catch (err) {
-    state.error = (err as Error).message;
-    state.phase = "review";
-  } finally {
-    pushState();
-  }
-}
+const runner = new JobRunner({
+  loadSettings,
+  listFolders: listFolderTree,
+  toFolderIndex,
+  summarise,
+  createClassifiers,
+  moveMessages: moveBatched,
+  emit: broadcast,
+});
 
 messenger.runtime.onConnect.addListener((port) => {
   if (port.name !== PORT_NAME) return;
   ports.add(port);
-  port.postMessage({ type: "state", state } satisfies BgEvent);
+  port.postMessage({ type: "state", state: runner.getState() } satisfies BgEvent);
   port.onDisconnect.addListener(() => ports.delete(port));
 });
 
@@ -289,22 +205,14 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "listFolders":
         return { ok: true, folders: await listFolderTree() };
       case "getState":
-        return { ok: true, state };
+        return { ok: true, state: runner.getState() };
       case "startClassify":
-        if (state.phase === "classifying" || state.phase === "applying") {
-          return { ok: false, error: "a job is already running" };
-        }
-        void runJob(request.sourceFolderId, request.instruction);
-        return { ok: true };
+        return runner.start(request.sourceFolderId, request.instruction);
       case "abort":
-        abortController?.abort();
+        runner.abort();
         return { ok: true };
       case "applyMoves":
-        if (state.phase !== "review") {
-          return { ok: false, error: "no results to apply" };
-        }
-        void applyMoves(request.messageIds);
-        return { ok: true };
+        return runner.apply(request.messageIds);
       default:
         return { ok: false, error: "unknown request" };
     }
