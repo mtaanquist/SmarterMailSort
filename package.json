@@ -1,6 +1,6 @@
 {
   "name": "smartermailsort",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Thunderbird MailExtension that sorts mail folders with an OpenAI-compatible LLM.",
   "type": "module",
   "private": true,
@@ -8,7 +8,7 @@
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\"",
+    "lint": "eslint --max-warnings=0 \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\"",
     "lint:ext": "web-ext lint --source-dir dist",
     "test": "vitest run",
     "test:watch": "vitest",
