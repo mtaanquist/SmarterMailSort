@@ -86,6 +86,18 @@
             />
             <span id="confidence-value">0.00</span>
           </label>
+          <div class="inline keyword-filter">
+            <input
+              type="text"
+              id="keyword-filter"
+              placeholder="keyword, another…"
+              aria-label="Filter by keyword (subject or sender)"
+              title="Comma-separated. Matches subject or sender, case-insensitive."
+            />
+            <button id="deselect-matching" type="button">Deselect matching</button>
+            <button id="select-matching" type="button">Select matching</button>
+            <span id="filter-count" class="hint" aria-live="polite"></span>
+          </div>
         </div>
         <div class="actions">
           <button id="apply" type="button">Apply selected moves</button>
