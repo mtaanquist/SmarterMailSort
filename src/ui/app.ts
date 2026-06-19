@@ -216,22 +216,48 @@ function wireEvents(): void {
   });
 }
 
-async function init(): Promise<void> {
-  wireEvents();
-  await loadFolders();
+/**
+ * Render an incoming background state, but ignore one that would erase results
+ * we are already showing — e.g. the background event page suspended while idle
+ * and respawned empty while the user sits in the review phase.
+ */
+function applyStateEvent(incoming: JobState): void {
+  if (
+    lastState &&
+    lastState.results.length > 0 &&
+    incoming.phase === "idle" &&
+    incoming.results.length === 0
+  ) {
+    return;
+  }
+  render(incoming);
+}
 
+/** Connect to the background, reconnecting if its event page suspends. */
+function connectPort(): void {
   const port = messenger.runtime.connect({ name: PORT_NAME });
   port.onMessage.addListener((message) => {
     const event = message as BgEvent;
-    if (event.type === "state") render(event.state);
+    if (event.type === "state") applyStateEvent(event.state);
     else if (event.type === "progress" && lastState) {
       lastState.progress = event.progress;
       renderProgress(lastState);
     }
   });
+  port.onDisconnect.addListener(() => {
+    // The MV3 background event page can suspend while idle, closing the port.
+    // Reconnect so progress/state updates recover on the next interaction.
+    window.setTimeout(connectPort, 1500);
+  });
+}
+
+async function init(): Promise<void> {
+  wireEvents();
+  await loadFolders();
+  connectPort();
 
   const res = await send({ type: "getState" });
-  if (res.ok && "state" in res) render(res.state);
+  if (res.ok && "state" in res) applyStateEvent(res.state);
 }
 
 void init();

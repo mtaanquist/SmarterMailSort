@@ -10,26 +10,23 @@ beforeEach(() => {
 afterEach(() => clearMockMessenger());
 
 describe("listFolderTree", () => {
-  it("flattens the account folder tree with paths and depth", async () => {
+  it("flattens the account folder tree fetched via getSubFolders, with paths and depth", async () => {
     mock.accounts.list.mockResolvedValue([
+      { id: "acc1", name: "Local Folders", rootFolder: { id: "root1", name: "" } },
+    ]);
+    // accounts.list returns the root without subfolders; the tree comes from
+    // getSubFolders(root, true).
+    mock.folders.getSubFolders.mockResolvedValue([
+      { id: "f-inbox", name: "Inbox" },
       {
-        id: "acc1",
-        name: "Local Folders",
-        rootFolder: {
-          name: "",
-          subFolders: [
-            { id: "f-inbox", name: "Inbox" },
-            {
-              id: "f-archive",
-              name: "archive",
-              subFolders: [{ id: "f-2025", name: "2025" }],
-            },
-          ],
-        },
+        id: "f-archive",
+        name: "archive",
+        subFolders: [{ id: "f-2025", name: "2025" }],
       },
     ]);
 
     const nodes = await listFolderTree();
+    expect(mock.folders.getSubFolders).toHaveBeenCalledWith({ id: "root1", name: "" }, true);
     expect(nodes.map((n) => n.path)).toEqual([
       "Local Folders/Inbox",
       "Local Folders/archive",
@@ -37,6 +34,20 @@ describe("listFolderTree", () => {
     ]);
     expect(nodes.find((n) => n.path === "Local Folders/archive/2025")?.depth).toBe(1);
     expect(nodes.find((n) => n.path === "Local Folders/Inbox")?.id).toBe("f-inbox");
+  });
+
+  it("falls back to the account's carried folders if getSubFolders fails", async () => {
+    mock.accounts.list.mockResolvedValue([
+      {
+        id: "acc1",
+        name: "Local Folders",
+        rootFolder: { id: "root1", name: "", subFolders: [{ id: "f-inbox", name: "Inbox" }] },
+      },
+    ]);
+    mock.folders.getSubFolders.mockRejectedValue(new Error("nope"));
+
+    const nodes = await listFolderTree();
+    expect(nodes.map((n) => n.path)).toEqual(["Local Folders/Inbox"]);
   });
 });
 
