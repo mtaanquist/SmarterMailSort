@@ -320,14 +320,21 @@ export class JobRunner {
     try {
       const settings = await this.deps.loadSettings();
       const nodes = await this.deps.listFolders();
-      const { allowedPaths } = this.deps.toFolderIndex(nodes);
 
-      // The source folder itself is not a useful move target; remove it.
-      const sourcePath = nodes.find((n) => n.id === sourceFolderId)?.path;
+      // By default, targets are limited to the source folder's OWN account
+      // (minus itself): moving mail across accounts is rarely intended and just
+      // gives the model irrelevant, confusing options. Users can opt into
+      // cross-account moves via settings. allowedPaths mirrors the targets so a
+      // decision can never name an out-of-scope or non-existent folder.
+      const sourceAccount = nodes.find((n) => n.id === sourceFolderId)?.accountName;
+      const sameAccount = (n: FolderNode): boolean =>
+        settings.allowCrossAccount ||
+        sourceAccount === undefined ||
+        n.accountName === sourceAccount;
       const targets: FolderRef[] = nodes
-        .filter((n) => n.id !== sourceFolderId)
+        .filter((n) => n.id !== sourceFolderId && sameAccount(n))
         .map((n) => ({ id: n.id, path: n.path }));
-      if (sourcePath) allowedPaths.delete(sourcePath);
+      const allowedPaths = new Set(targets.map((t) => t.path));
 
       const raw = this.deps.createClassifiers({
         instruction,
