@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractJsonObject, parseDecision } from "../src/core/decisionParser.js";
+import {
+  extractJsonArray,
+  extractJsonObject,
+  parseDecision,
+  parseDecisions,
+} from "../src/core/decisionParser.js";
 
 const allowed = new Set(["Local Folders/to_be_deleted", "Local Folders/archive"]);
 
@@ -50,5 +55,70 @@ describe("parseDecision", () => {
   it("defaults to keep on unparseable input", () => {
     expect(parseDecision("garbage", allowed).action).toBe("keep");
     expect(parseDecision("", allowed).action).toBe("keep");
+  });
+});
+
+describe("extractJsonArray", () => {
+  it("extracts a balanced array from prose and fences", () => {
+    const text = 'Here:\n```json\n[{"id":1},{"id":2}]\n```';
+    expect(extractJsonArray(text)).toBe('[{"id":1},{"id":2}]');
+  });
+
+  it("ignores brackets inside strings", () => {
+    const text = '[{"reason":"a ] bracket"}]';
+    expect(extractJsonArray(text)).toBe(text);
+  });
+});
+
+describe("parseDecisions", () => {
+  const ids = [1, 2, 3];
+
+  it("parses an object with a results array, keyed by id", () => {
+    const raw = JSON.stringify({
+      results: [
+        { id: 1, action: "move", folder: "Local Folders/archive", reason: "old", confidence: 0.8 },
+        { id: 2, action: "keep", reason: "inbox" },
+      ],
+    });
+    const map = parseDecisions(raw, allowed, ids);
+    expect(map.get(1)).toEqual({
+      action: "move",
+      folder: "Local Folders/archive",
+      reason: "old",
+      confidence: 0.8,
+    });
+    expect(map.get(2)?.action).toBe("keep");
+    // Id 3 was omitted by the model — caller defaults it to keep.
+    expect(map.has(3)).toBe(false);
+  });
+
+  it("parses a bare top-level array", () => {
+    const raw = '[{"id":2,"action":"move","folder":"Local Folders/to_be_deleted","reason":"r"}]';
+    const map = parseDecisions(raw, allowed, ids);
+    expect(map.get(2)?.folder).toBe("Local Folders/to_be_deleted");
+  });
+
+  it("keeps when a batched entry targets an unknown folder", () => {
+    const raw = '{"results":[{"id":1,"action":"move","folder":"Nope/x","reason":"r"}]}';
+    expect(parseDecisions(raw, allowed, ids).get(1)?.action).toBe("keep");
+  });
+
+  it("drops entries with ids that were not in the batch", () => {
+    const raw = '{"results":[{"id":99,"action":"keep"},{"id":1,"action":"keep"}]}';
+    const map = parseDecisions(raw, allowed, ids);
+    expect(map.has(99)).toBe(false);
+    expect(map.has(1)).toBe(true);
+  });
+
+  it("ignores duplicate ids, keeping the first", () => {
+    const raw = '{"results":[{"id":1,"action":"keep","reason":"first"},{"id":1,"action":"move","folder":"Local Folders/archive"}]}';
+    const map = parseDecisions(raw, allowed, ids);
+    expect(map.get(1)?.action).toBe("keep");
+    expect(map.get(1)?.reason).toBe("first");
+  });
+
+  it("returns an empty map on unparseable input", () => {
+    expect(parseDecisions("garbage", allowed, ids).size).toBe(0);
+    expect(parseDecisions("", allowed, ids).size).toBe(0);
   });
 });

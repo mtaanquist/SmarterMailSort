@@ -12,9 +12,12 @@ const KEEP = (reason: string): Decision => ({
   confidence: 0,
 });
 
-/** Extract the first balanced JSON object from arbitrary model text. */
-export function extractJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
+/**
+ * Extract the first balanced bracketed span (`open`..`close`) from arbitrary
+ * model text, ignoring brackets that appear inside JSON strings.
+ */
+function extractBalanced(text: string, open: string, close: string): string | null {
+  const start = text.indexOf(open);
   if (start === -1) return null;
   let depth = 0;
   let inString = false;
@@ -28,8 +31,8 @@ export function extractJsonObject(text: string): string | null {
       continue;
     }
     if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
+    else if (ch === open) depth++;
+    else if (ch === close) {
       depth--;
       if (depth === 0) return text.slice(start, i + 1);
     }
@@ -37,10 +40,46 @@ export function extractJsonObject(text: string): string | null {
   return null;
 }
 
+/** Extract the first balanced JSON object from arbitrary model text. */
+export function extractJsonObject(text: string): string | null {
+  return extractBalanced(text, "{", "}");
+}
+
+/** Extract the first balanced JSON array from arbitrary model text. */
+export function extractJsonArray(text: string): string | null {
+  return extractBalanced(text, "[", "]");
+}
+
 function clampConfidence(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));
+}
+
+/** Validate one parsed decision object against the allowed folder set. */
+function normaliseDecision(
+  obj: Record<string, unknown>,
+  allowedFolders: ReadonlySet<string>,
+): Decision {
+  const action = String(obj.action ?? "").toLowerCase();
+  const reason =
+    typeof obj.reason === "string" && obj.reason.trim()
+      ? obj.reason.trim()
+      : "(no reason given)";
+  const confidence = clampConfidence(obj.confidence);
+
+  if (action !== "move") {
+    return { action: "keep", folder: null, reason, confidence };
+  }
+
+  const folder = typeof obj.folder === "string" ? obj.folder.trim() : "";
+  if (!folder || !allowedFolders.has(folder)) {
+    return KEEP(
+      `model targeted unknown folder "${folder}"; keeping for review`,
+    );
+  }
+
+  return { action: "move", folder, reason, confidence };
 }
 
 /**
@@ -62,23 +101,68 @@ export function parseDecision(
     return KEEP("invalid JSON in model response");
   }
 
-  const action = String(obj.action ?? "").toLowerCase();
-  const reason =
-    typeof obj.reason === "string" && obj.reason.trim()
-      ? obj.reason.trim()
-      : "(no reason given)";
-  const confidence = clampConfidence(obj.confidence);
+  return normaliseDecision(obj, allowedFolders);
+}
 
-  if (action !== "move") {
-    return { action: "keep", folder: null, reason, confidence };
+/** Pull a list of raw decision objects from a model reply, if one is present. */
+function extractDecisionList(raw: string): Record<string, unknown>[] | null {
+  const text = raw ?? "";
+  const objAt = text.indexOf("{");
+  const arrAt = text.indexOf("[");
+
+  // Try a bare top-level array first when it appears before any object.
+  if (arrAt !== -1 && (objAt === -1 || arrAt < objAt)) {
+    const arr = extractJsonArray(text);
+    if (arr) {
+      try {
+        const parsed = JSON.parse(arr) as unknown;
+        if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+      } catch {
+        /* fall through to object handling */
+      }
+    }
   }
 
-  const folder = typeof obj.folder === "string" ? obj.folder.trim() : "";
-  if (!folder || !allowedFolders.has(folder)) {
-    return KEEP(
-      `model targeted unknown folder "${folder}"; keeping for review`,
-    );
+  const obj = extractJsonObject(text);
+  if (obj) {
+    try {
+      const parsed = JSON.parse(obj) as Record<string, unknown>;
+      for (const key of ["results", "decisions", "items", "emails"]) {
+        if (Array.isArray(parsed[key])) {
+          return parsed[key] as Record<string, unknown>[];
+        }
+      }
+    } catch {
+      /* fall through */
+    }
   }
+  return null;
+}
 
-  return { action: "move", folder, reason, confidence };
+/**
+ * Parse a batched model reply into validated decisions keyed by message id.
+ * Any id the model omitted (or returned an unusable entry for) is left out of
+ * the map, so callers can default those messages to "keep".
+ * @param raw the model's text output
+ * @param allowedFolders the set of folder paths the model may legally target
+ * @param ids the message ids that were sent in this batch (for validation)
+ */
+export function parseDecisions(
+  raw: string,
+  allowedFolders: ReadonlySet<string>,
+  ids: readonly number[],
+): Map<number, Decision> {
+  const out = new Map<number, Decision>();
+  const valid = new Set(ids);
+  const list = extractDecisionList(raw);
+  if (!list) return out;
+
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const idRaw = (entry as Record<string, unknown>).id;
+    const id = typeof idRaw === "number" ? idRaw : Number(idRaw);
+    if (!Number.isFinite(id) || !valid.has(id) || out.has(id)) continue;
+    out.set(id, normaliseDecision(entry, allowedFolders));
+  }
+  return out;
 }

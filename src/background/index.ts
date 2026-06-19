@@ -2,9 +2,12 @@
 // brokers requests/progress between the UI tab and the platform + LLM layers.
 
 import { runClassification } from "../core/classifier.js";
-import { parseDecision } from "../core/decisionParser.js";
+import { parseDecision, parseDecisions } from "../core/decisionParser.js";
 import { chatCompletion } from "../core/llmClient.js";
-import { buildClassificationMessages } from "../core/promptBuilder.js";
+import {
+  buildBatchClassificationMessages,
+  buildClassificationMessages,
+} from "../core/promptBuilder.js";
 import {
   PORT_NAME,
   type BgEvent,
@@ -164,11 +167,43 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     return parseDecision(raw, allowedPaths);
   };
 
+  // Batched path: classify several emails per LLM request, then map the keyed
+  // results back to the input order (any omitted email defaults to "keep").
+  const classifyBatch = async (
+    summaries: MessageSummary[],
+  ): Promise<Decision[]> => {
+    const messages = buildBatchClassificationMessages(
+      instruction,
+      folderRefs,
+      summaries,
+    );
+    const raw = await chatCompletion(settings, messages, fetch, {
+      jsonMode: true,
+      signal: abortController?.signal,
+    });
+    const byId = parseDecisions(
+      raw,
+      allowedPaths,
+      summaries.map((s) => s.id),
+    );
+    return summaries.map(
+      (s) =>
+        byId.get(s.id) ?? {
+          action: "keep",
+          folder: null,
+          reason: "model omitted a decision for this email",
+          confidence: 0,
+        },
+    );
+  };
+
   try {
     const results = await runClassification({
       source: summarise(sourceFolderId, settings.maxBodyChars),
       classify,
+      classifyBatch,
       concurrency: settings.concurrency,
+      batchSize: settings.batchSize,
       signal: abortController.signal,
       onProgress: (progress) => {
         state.progress = progress;
