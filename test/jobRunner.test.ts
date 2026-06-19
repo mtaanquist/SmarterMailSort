@@ -126,6 +126,7 @@ function makeRunner(
     summarise: async function* () {
       for (const id of ids) yield summary(id);
     },
+    countMessages: async () => ids.length,
     createClassifiers: (ctx): Classifiers => {
       harness.capturedCtx = ctx;
       return {
@@ -248,6 +249,37 @@ describe("JobRunner.start", () => {
     expect(h.phaseLog[0]).toBe("classifying");
     expect(h.phaseLog.at(-1)).toBe("review");
     expect(h.events.some((e) => e.type === "progress")).toBe(true);
+  });
+
+  it("counts the folder up front and surfaces the total in progress", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.phaseLog.at(-1) === "review");
+    const totals = h.events
+      .filter(
+        (e): e is Extract<BgEvent, { type: "progress" }> => e.type === "progress",
+      )
+      .map((e) => e.progress.total);
+    expect(totals.length).toBeGreaterThan(0);
+    expect(totals.every((t) => t === 3)).toBe(true);
+  });
+
+  it("runs without a total when the folder count fails", async () => {
+    const h = makeRunner({
+      countMessages: async () => {
+        throw new Error("count boom");
+      },
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.phaseLog.at(-1) === "review");
+    // Classification still completes; progress just carries a null total.
+    expect(h.runner.getState().results).toHaveLength(3);
+    const totals = h.events
+      .filter(
+        (e): e is Extract<BgEvent, { type: "progress" }> => e.type === "progress",
+      )
+      .map((e) => e.progress.total);
+    expect(totals.every((t) => t === null)).toBe(true);
   });
 
   it("captures a settings/folder load failure as an error and returns to idle", async () => {

@@ -7,17 +7,25 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <main class="container">
-      <h1>SmarterMailSort</h1>
+    <div class="container">
+      <header class="app-header">
+        <img class="brand-mark" src="../icons/icon.svg" alt="" />
+        <div class="brand-text">
+          <h1 class="brand-name">SmarterMailSort</h1>
+          <span class="brand-tag">local triage</span>
+        </div>
+        <a id="settings-link" class="header-link" href="#">Settings</a>
+      </header>
 
+      <main>
       <section class="panel">
         <label>
-          Source folder
+          <span class="eyebrow">Source folder</span>
           <select id="folder"></select>
         </label>
 
         <label>
-          Instruction
+          <span class="eyebrow">Instruction</span>
           <textarea
             id="instruction"
             rows="3"
@@ -42,7 +50,6 @@
             <input type="checkbox" id="cross-account" />
             Allow moves to other accounts
           </label>
-          <a id="settings-link" href="#">Settings</a>
         </div>
       </section>
 
@@ -63,6 +70,7 @@
         <h2>Progress</h2>
         <progress id="progress" max="100" value="0"></progress>
         <p id="progress-text" class="status"></p>
+        <p id="progress-stats" class="hint"></p>
         <p id="progress-note" class="status" hidden></p>
       </section>
 
@@ -111,7 +119,8 @@
       </section>
 
       <p id="error" class="status err" role="alert" hidden></p>
-    </main>
+      </main>
+    </div>
 
     <script type="module" src="app.js"></script>
   </body>

@@ -88,6 +88,8 @@ export interface JobRunnerDeps {
   };
   /** Stream of model-ready summaries for a folder. */
   summarise: (folderId: string, maxBodyChars: number) => AsyncIterable<MessageSummary>;
+  /** Count the messages in a folder up front, so progress can show a total/ETA. */
+  countMessages: (folderId: string) => Promise<number>;
   /** Build the LLM-backed classify functions for this run. */
   createClassifiers: (ctx: ClassifierContext) => Classifiers;
   /** Apply moves grouped by destination folder id. */
@@ -426,6 +428,15 @@ export class JobRunner {
         onRetry: (notice) => this.deps.emit({ type: "notice", notice }),
       });
 
+      // Count the folder up front so the UI can show a total, remaining count,
+      // and ETA. It's a header-only scan (cheap next to classification); if it
+      // fails we just run without a total rather than aborting the job.
+      const total = await this.deps.countMessages(sourceFolderId).catch(() => null);
+      if (!signal.aborted) {
+        this.state.progress = { processed: 0, total };
+        this.deps.emit({ type: "progress", progress: this.state.progress });
+      }
+
       const results = await runClassification({
         source: this.deps.summarise(sourceFolderId, settings.maxBodyChars),
         // Skip the LLM for messages already decided in a prior (resumed) pass.
@@ -433,6 +444,7 @@ export class JobRunner {
         classifyBatch: (summaries) => this.cachedOrClassifyBatch(summaries, raw),
         concurrency: settings.concurrency,
         batchSize: settings.batchSize,
+        total,
         signal,
         onProgress: (progress) => {
           this.state.progress = progress;
