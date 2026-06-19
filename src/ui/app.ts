@@ -98,10 +98,15 @@ function renderReview(state: JobState): void {
   const moves = groupMovesByFolder(state.results);
   const moveCount = [...moves.values()].reduce((n, list) => n + list.length, 0);
   const errors = state.results.filter((r) => r.error).length;
+  const stoppedNote = state.stopped ? "Stopped early — " : "";
+  const totalNote =
+    state.stopped && state.progress?.total
+      ? ` of ~${state.progress.total}`
+      : "";
   el.reviewSummary.textContent =
     state.phase === "done"
       ? `Done. ${moveCount} move(s) were processed.`
-      : `${state.results.length} classified · ${moveCount} proposed move(s) · ${errors} error(s).`;
+      : `${stoppedNote}${state.results.length}${totalNote} classified · ${moveCount} proposed move(s) · ${errors} error(s).`;
 
   el.review.innerHTML = "";
   for (const [folder, items] of moves) {
@@ -169,6 +174,7 @@ function downloadReport(): void {
     sourceFolder: sourcePath,
     instruction: lastState.instruction,
     dryRun: el.dryRun.checked || lastState.phase !== "done",
+    stopped: lastState.stopped,
     generatedAt: new Date().toISOString(),
   });
   const blob = new Blob([markdown], { type: "text/markdown" });

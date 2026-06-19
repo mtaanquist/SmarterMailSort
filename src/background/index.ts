@@ -28,6 +28,7 @@ const state: JobState = {
   progress: null,
   results: [],
   error: null,
+  stopped: false,
 };
 
 let abortController: AbortController | null = null;
@@ -143,10 +144,12 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
   state.instruction = instruction;
   state.results = [];
   state.error = null;
+  state.stopped = false;
   state.progress = { processed: 0, total: null };
   pushState();
 
   abortController = new AbortController();
+  const { signal } = abortController;
   const settings = await loadSettings();
   const nodes = await listFolderTree();
   const { allowedPaths } = toFolderIndex(nodes);
@@ -162,7 +165,7 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     const messages = buildClassificationMessages(instruction, folderRefs, summary);
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
-      signal: abortController?.signal,
+      signal,
     });
     return parseDecision(raw, allowedPaths);
   };
@@ -179,7 +182,7 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
     );
     const raw = await chatCompletion(settings, messages, fetch, {
       jsonMode: true,
-      signal: abortController?.signal,
+      signal,
     });
     const byId = parseDecisions(
       raw,
@@ -204,13 +207,14 @@ async function runJob(sourceFolderId: string, instruction: string): Promise<void
       classifyBatch,
       concurrency: settings.concurrency,
       batchSize: settings.batchSize,
-      signal: abortController.signal,
+      signal,
       onProgress: (progress) => {
         state.progress = progress;
         broadcast({ type: "progress", progress });
       },
     });
     state.results = results;
+    state.stopped = signal.aborted;
     state.phase = "review";
   } catch (err) {
     state.error = (err as Error).message;

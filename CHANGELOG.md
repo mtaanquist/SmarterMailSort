@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start) when your model returns reliable JSON. The model returns one result
   per email keyed by id, so any email it reorders or omits safely defaults to
   "keep" for review.
+- **Stop & review.** The classify button's companion (formerly "Stop") now
+  reads *Stop & review* and reliably drops you into the review screen with
+  everything classified so far — nothing is moved. The review header and the
+  exported report note when a run was stopped early ("Stopped early — N of ~M
+  classified").
 
 ## [0.2.5] - 2026-06-19
 
