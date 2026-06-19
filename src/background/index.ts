@@ -4,6 +4,7 @@
 
 import { parseDecision, parseDecisions } from "../core/decisionParser.js";
 import { chatCompletion, type RetryInfo } from "../core/llmClient.js";
+import { log, logError, warn } from "../core/log.js";
 import { JobRunner } from "../core/jobRunner.js";
 import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
 import {
@@ -42,6 +43,16 @@ const ports = new Set<browser.runtime.Port>();
 let appTabId: number | undefined;
 
 function broadcast(event: BgEvent): void {
+  // Phase transitions are the spine of the job lifecycle; log them (but not the
+  // per-message "progress" firehose) so a stalled run is easy to place.
+  if (event.type === "state") {
+    log("state →", event.state.phase, {
+      results: event.state.results.length,
+      resumable: event.state.resumable?.count ?? null,
+      stopped: event.state.stopped,
+      error: event.state.error,
+    });
+  }
   for (const port of ports) {
     try {
       port.postMessage(event);
@@ -51,10 +62,19 @@ function broadcast(event: BgEvent): void {
   }
 }
 
-// A periodic alarm whose only job is to wake the event page often enough that an
-// active classification run is less likely to be suspended mid-flight. The
-// checkpoint is the real safety net; this just reduces interruptions.
+// Keeping the event page alive during a long run is two mechanisms working
+// together. (1) A self-rescheduling timer makes a cheap WebExtension API call
+// every KEEPALIVE_MS, which resets the page's idle-suspension timer — this is
+// what actually holds the page up while a job runs (a bare `await fetch` chain
+// does not reliably count as activity). (2) A periodic alarm is the backstop:
+// it survives a suspension and wakes the page so a checkpoint-backed resume can
+// be offered. The checkpoint remains the real safety net for the data; these
+// just keep the run from being interrupted in the first place, and let the UI
+// recover when it is.
 const KEEPALIVE_ALARM = "smartermailsort-keepalive";
+// Comfortably under the ~30s event-page idle timeout so a tick always lands
+// before suspension can.
+const KEEPALIVE_MS = 20_000;
 
 // The thunderbird-webext-browser types omit the alarms API (Thunderbird supports
 // it at runtime with the "alarms" permission), so we reach it via a minimal shape.
@@ -65,15 +85,33 @@ interface AlarmsApi {
 }
 const alarms = (messenger as unknown as { alarms: AlarmsApi }).alarms;
 
+let keepaliveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** One heartbeat: a trivial API call resets the idle timer, then reschedule. */
+function keepaliveTick(): void {
+  void messenger.runtime.getPlatformInfo().then(
+    () => log("keepalive ♥"),
+    () => {},
+  );
+  keepaliveTimer = setTimeout(keepaliveTick, KEEPALIVE_MS);
+}
+
 function setKeepalive(active: boolean): void {
   try {
     if (active) {
       alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+      if (keepaliveTimer === undefined) keepaliveTick();
+      log("keepalive on");
     } else {
       void alarms.clear(KEEPALIVE_ALARM);
+      if (keepaliveTimer !== undefined) {
+        clearTimeout(keepaliveTimer);
+        keepaliveTimer = undefined;
+      }
+      log("keepalive off");
     }
   } catch (err) {
-    console.warn("SmarterMailSort: keepalive alarm failed", err);
+    warn("keepalive failed", err);
   }
 }
 
@@ -129,13 +167,15 @@ function registerEntryPoints(): void {
     if (tabId === appTabId) appTabId = undefined;
   });
 
-  // The keepalive alarm needs a listener so firing it wakes the event page.
+  // The keepalive alarm needs a listener so firing it wakes the event page. The
+  // wake itself is the point; if it fired after a suspension killed a run, the
+  // page is now back up to serve a getState (and thus offer a resume).
   try {
-    alarms.onAlarm.addListener(() => {
-      /* wake-only: nothing to do, the wake itself is the point */
+    alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === KEEPALIVE_ALARM) log("keepalive alarm woke the page");
     });
   } catch (err) {
-    console.error("SmarterMailSort: failed to register keepalive listener", err);
+    logError("failed to register keepalive listener", err);
   }
 
   try {
@@ -268,14 +308,36 @@ const runner = new JobRunner({
 messenger.runtime.onConnect.addListener((port) => {
   if (port.name !== PORT_NAME) return;
   ports.add(port);
+  log("port connected", { ports: ports.size });
   port.postMessage({ type: "state", state: runner.getState() } satisfies BgEvent);
-  port.onDisconnect.addListener(() => ports.delete(port));
+  port.onDisconnect.addListener(() => {
+    ports.delete(port);
+    log("port disconnected", { ports: ports.size });
+  });
 });
+
+// Assigned at the bottom from runner.init(); requests that read job state await
+// it first so a freshly-woken page has loaded its checkpoint before it answers
+// (otherwise a recovery getState can race init and report "idle, nothing to
+// resume" for a run that is in fact resumable).
+let initReady: Promise<void> | null = null;
+
+/** Requests whose answer depends on restored job state must wait for init. */
+const STATE_DEPENDENT = new Set<UiRequest["type"]>([
+  "getState",
+  "resume",
+  "discardResume",
+  "abort",
+  "applyMoves",
+  "undo",
+]);
 
 messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const request = message as UiRequest;
+  log("request:", request.type);
 
   void (async (): Promise<UiResponse> => {
+    if (initReady && STATE_DEPENDENT.has(request.type)) await initReady;
     switch (request.type) {
       case "getSettings":
         return { ok: true, settings: await loadSettings() };
@@ -295,12 +357,17 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "startClassify":
         // Remember the instruction so the UI can prefill it next time.
         void saveLastInstruction(request.instruction);
+        log("startClassify", {
+          folder: request.sourceFolderId,
+          allowCrossAccount: request.allowCrossAccount,
+        });
         return runner.start(
           request.sourceFolderId,
           request.instruction,
           request.allowCrossAccount,
         );
       case "abort":
+        log("abort requested");
         runner.abort();
         return { ok: true };
       case "applyMoves":
@@ -331,8 +398,22 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+// Every time the event page (re)loads — first run, manual wake, or respawn after
+// an idle suspension — this whole module re-executes. The breadcrumb makes those
+// respawns visible: a fresh "background loaded" line in the middle of a run is
+// the signature of a suspension.
+log("background event page loaded");
+
+// A run that died to suspension can leave its keepalive alarm armed (the cleanup
+// in runJob's finally never ran). Clear any orphan now; a genuine resume re-arms
+// it. This avoids a respawned-but-idle page being woken forever.
+void alarms.clear(KEEPALIVE_ALARM);
+
 // Register UI entry points last, so the message handler above is always live.
 registerEntryPoints();
 
-// Restore any persisted "undo last apply" so it survives event-page restarts.
-void runner.init();
+// Restore persisted state the event page may have lost to suspension/restart:
+// the "undo last apply" record and any interrupted-run checkpoint. State-reading
+// requests await this (see initReady) so recovery never races the load.
+initReady = runner.init();
+void initReady.then(() => log("init complete", runner.getState().phase));
