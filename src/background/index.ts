@@ -60,29 +60,44 @@ async function openApp(folderId?: string): Promise<void> {
   }
 }
 
-messenger.browserAction.onClicked.addListener(() => {
-  void openApp();
-});
-
 const FOLDER_MENU_ID = "smartermailsort-sort-folder";
 
-// Register a right-click entry on folders. removeAll() first keeps this
-// idempotent across event-page restarts (avoids duplicate-id errors).
-async function setupMenus(): Promise<void> {
-  await messenger.menus.removeAll();
-  messenger.menus.create({
-    id: FOLDER_MENU_ID,
-    title: "Sort with SmarterMailSort…",
-    contexts: ["folder_pane"],
-  });
-}
-void setupMenus();
-
-messenger.menus.onClicked.addListener((info) => {
-  if (info.menuItemId === FOLDER_MENU_ID && info.selectedFolder?.id) {
-    void openApp(info.selectedFolder.id);
+// Register the toolbar button and folder context menu. These are wrapped in
+// try/catch and run AFTER the runtime.onMessage handler is installed (see
+// bottom of file) so that an API quirk here can never take down the message
+// handler that powers the settings page and UI.
+function registerEntryPoints(): void {
+  try {
+    // MV3 toolbar button is the `action` API; `browser_action` is MV2-only and
+    // is ignored by Thunderbird MV3 (leaving messenger.browserAction undefined).
+    messenger.action.onClicked.addListener(() => void openApp());
+  } catch (err) {
+    console.error("SmarterMailSort: failed to register toolbar button", err);
   }
-});
+
+  try {
+    messenger.menus.onClicked.addListener((info) => {
+      if (info.menuItemId === FOLDER_MENU_ID && info.selectedFolder?.id) {
+        void openApp(info.selectedFolder.id);
+      }
+    });
+    // removeAll() first keeps creation idempotent across event-page restarts.
+    void messenger.menus
+      .removeAll()
+      .then(() =>
+        messenger.menus.create({
+          id: FOLDER_MENU_ID,
+          title: "Sort with SmarterMailSort…",
+          contexts: ["folder_pane"],
+        }),
+      )
+      .catch((err) =>
+        console.error("SmarterMailSort: failed to create folder menu", err),
+      );
+  } catch (err) {
+    console.error("SmarterMailSort: failed to register folder menu", err);
+  }
+}
 
 /** Stream every message in the folder as a model-ready summary. */
 async function* summarise(
@@ -236,3 +251,6 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Keep the message channel open for the async response.
   return true;
 });
+
+// Register UI entry points last, so the message handler above is always live.
+registerEntryPoints();

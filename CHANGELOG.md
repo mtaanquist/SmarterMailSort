@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-19
+
+### Fixed
+- **Settings now actually save.** The manifest used the MV2 `browser_action`
+  key, which Thunderbird MV3 ignores — leaving `messenger.browserAction`
+  undefined, so the background script threw on load and never registered its
+  message handler (every settings save failed with "Receiving end does not
+  exist"). Switched to the MV3 `action` key/API.
+- Entry-point registration (toolbar button, folder menu) is now wrapped in
+  try/catch and runs after the message handler is installed, so a future API
+  quirk can't take down settings/UI messaging.
+
 ## [0.2.0] - 2026-06-19
 
 ### Added
@@ -39,6 +51,7 @@ Initial release.
 - Release packaging that attaches both `.zip` and `.xpi` artifacts to the
   GitHub Release, plus an `INSTALL.md` covering signed/temporary installation.
 
-[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mtaanquist/SmarterMailSort/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mtaanquist/SmarterMailSort/releases/tag/v0.1.0
