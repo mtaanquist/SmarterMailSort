@@ -94,6 +94,19 @@ input[type="checkbox"] {
   margin-top: 0;
 }
 
+/* Keyword bulk-select: text box + two buttons share the controls row. */
+.keyword-filter input[type="text"] {
+  display: inline-block;
+  width: auto;
+  margin-top: 0;
+  flex: 1 1 9rem;
+  min-width: 7rem;
+}
+
+.keyword-filter .hint {
+  margin: 0;
+}
+
 /* The per-folder select-all checkbox sits inline in the group header. */
 .folder-group summary .folder-select {
   margin-right: 0.4rem;

@@ -12,6 +12,7 @@ import {
   type UiResponse,
 } from "../core/protocol.js";
 import { buildMarkdownReport } from "../core/report.js";
+import { matchesKeywords, parseKeywords } from "../core/reviewFilter.js";
 import {
   DEFAULT_PRESETS,
   findPreset,
@@ -51,6 +52,10 @@ const el = {
   selectedCount: document.getElementById("selected-count") as HTMLElement,
   confidenceThreshold: document.getElementById("confidence-threshold") as HTMLInputElement,
   confidenceValue: document.getElementById("confidence-value") as HTMLElement,
+  keywordFilter: document.getElementById("keyword-filter") as HTMLInputElement,
+  deselectMatching: document.getElementById("deselect-matching") as HTMLButtonElement,
+  selectMatching: document.getElementById("select-matching") as HTMLButtonElement,
+  filterCount: document.getElementById("filter-count") as HTMLElement,
   review: document.getElementById("review") as HTMLElement,
   apply: document.getElementById("apply") as HTMLButtonElement,
   download: document.getElementById("download") as HTMLButtonElement,
@@ -199,6 +204,7 @@ function renderReview(state: JobState): void {
   el.reviewControls.hidden = state.phase !== "review" || moveCount === 0;
   el.confidenceThreshold.value = String(confidenceThreshold);
   el.confidenceValue.textContent = confidenceThreshold.toFixed(2);
+  el.filterCount.textContent = "";
   applyThreshold();
   updateSelectionUi();
 }
@@ -208,6 +214,28 @@ function applyThreshold(): void {
   for (const cb of el.review.querySelectorAll<HTMLInputElement>(".move-checkbox")) {
     cb.checked = Number(cb.dataset.confidence) >= confidenceThreshold;
   }
+}
+
+/**
+ * Bulk select/deselect every proposed move whose subject or sender matches the
+ * keyword box — the quick way to clear out a swath (e.g. all newsletters) when
+ * there are thousands of hits. A blank query is a no-op.
+ */
+function applyKeywordAction(select: boolean): void {
+  const keywords = parseKeywords(el.keywordFilter.value);
+  if (keywords.length === 0) {
+    el.filterCount.textContent = "Type a keyword first.";
+    return;
+  }
+  let matched = 0;
+  for (const cb of el.review.querySelectorAll<HTMLInputElement>(".move-checkbox")) {
+    if (matchesKeywords(cb.dataset.search ?? "", keywords)) {
+      cb.checked = select;
+      matched++;
+    }
+  }
+  el.filterCount.textContent = `${matched} ${select ? "selected" : "deselected"}`;
+  updateSelectionUi();
 }
 
 /** Refresh counts, the global/per-folder tri-state boxes, and the apply button. */
@@ -267,6 +295,8 @@ function renderFolderGroup(
     checkbox.checked = true;
     checkbox.dataset.messageId = String(item.summary.id);
     checkbox.dataset.confidence = String(item.decision.confidence);
+    // Searchable text for the keyword filter: subject + sender.
+    checkbox.dataset.search = `${item.summary.subject} ${item.summary.author}`;
     checkbox.className = "move-checkbox";
     checkCell.appendChild(checkbox);
 
@@ -427,6 +457,16 @@ function wireEvents(): void {
     el.confidenceValue.textContent = confidenceThreshold.toFixed(2);
     applyThreshold();
     updateSelectionUi();
+  });
+
+  el.deselectMatching.addEventListener("click", () => applyKeywordAction(false));
+  el.selectMatching.addEventListener("click", () => applyKeywordAction(true));
+  // Enter in the keyword box runs the common case (deselect matches).
+  el.keywordFilter.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyKeywordAction(false);
+    }
   });
 
   // Delegated: per-folder select-all toggles its group; any box change updates counts.
