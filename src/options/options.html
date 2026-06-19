@@ -42,6 +42,17 @@
             Request timeout (ms)
             <input id="timeoutMs" type="number" min="1000" step="1000" value="60000" />
           </label>
+
+          <label>
+            Max retries on transient errors
+            <input id="maxRetries" type="number" min="0" max="10" step="1" value="2" />
+          </label>
+          <p class="hint">
+            Retries failed requests (HTTP 429 rate-limits, 5xx, network errors,
+            timeouts) with exponential backoff, honouring <code>Retry-After</code>
+            when the server sends it. <code>0</code> disables retries; a message
+            only falls back to "keep" once retries are exhausted.
+          </p>
         </fieldset>
 
         <fieldset>

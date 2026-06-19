@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Automatic retries with backoff** for transient LLM failures. Requests that
+  hit HTTP 429 (rate limit), 5xx, a network error, or a timeout are now retried
+  with exponential backoff (honouring a `Retry-After` header when the server
+  sends one) before a message falls back to "keep/error". Controlled by a new
+  *Max retries on transient errors* setting (default 2; `0` disables). 4xx
+  client errors and user-initiated stops are never retried. Especially useful
+  for long batched runs against busy local endpoints.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added

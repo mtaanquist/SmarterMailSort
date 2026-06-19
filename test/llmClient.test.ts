@@ -62,6 +62,96 @@ describe("chatCompletion", () => {
   });
 });
 
+const ok = () => jsonResponse({ choices: [{ message: { content: "ok" } }] });
+
+describe("chatCompletion retries", () => {
+  it("retries a 5xx and succeeds, calling onRetry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ error: "boom" }, false, 503))
+      .mockResolvedValueOnce(ok());
+    const onRetry = vi.fn();
+    const out = await chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+      maxRetries: 2,
+      retryBaseMs: 0,
+      onRetry,
+    });
+    expect(out).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry.mock.calls[0][0]).toMatchObject({ attempt: 1, status: 503 });
+  });
+
+  it("retries network errors up to maxRetries then throws", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    });
+    await expect(
+      chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+        maxRetries: 2,
+        retryBaseMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+  });
+
+  it("does not retry a 4xx client error", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ error: "nope" }, false, 400));
+    await expect(
+      chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+        maxRetries: 3,
+        retryBaseMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("honours a Retry-After header on 429", async () => {
+    const headers = { get: (k: string) => (k.toLowerCase() === "retry-after" ? "0" : null) };
+    const resp429 = {
+      ok: false,
+      status: 429,
+      headers,
+      json: async () => ({}),
+      text: async () => "rate limited",
+    } as unknown as Response;
+    const fetchMock = vi.fn().mockResolvedValueOnce(resp429).mockResolvedValueOnce(ok());
+    const onRetry = vi.fn();
+    const out = await chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+      maxRetries: 1,
+      retryBaseMs: 5000,
+      onRetry,
+    });
+    expect(out).toBe("ok");
+    // Retry-After of 0s overrides the 5s base backoff.
+    expect(onRetry.mock.calls[0][0].delayMs).toBe(0);
+  });
+
+  it("does not retry by default (maxRetries unset)", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ error: "boom" }, false, 500));
+    await expect(
+      chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retrying once the abort signal fires", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      throw new Error("network");
+    });
+    await expect(
+      chatCompletion(config, [{ role: "user", content: "hi" }], fetchMock, {
+        maxRetries: 5,
+        retryBaseMs: 0,
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("testConnection", () => {
   it("returns model ids on success", async () => {
     const fetchMock = vi.fn(async () =>
