@@ -30,6 +30,7 @@ const SETTINGS: Settings = {
   batchSize: 1,
   maxRetries: 3,
   retryBaseMs: 500,
+  allowCrossAccount: false,
 };
 
 const FOLDERS: FolderNode[] = [
@@ -201,6 +202,21 @@ describe("JobRunner.start", () => {
     await waitFor(() => h.runner.getState().phase === "review");
     expect(h.capturedCtx?.targets.map((t) => t.id)).toEqual(["fA", "fB"]);
     expect(h.capturedCtx?.allowedPaths.has("Other/Archive")).toBe(false);
+  });
+
+  it("includes other accounts when allowCrossAccount is enabled", async () => {
+    const crossAccount: FolderNode[] = [
+      ...FOLDERS,
+      { id: "other", path: "Other/Archive", depth: 1, accountName: "Other" },
+    ];
+    const h = makeRunner({
+      listFolders: async () => crossAccount,
+      loadSettings: async () => ({ ...SETTINGS, allowCrossAccount: true }),
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(h.capturedCtx?.targets.map((t) => t.id)).toEqual(["fA", "fB", "other"]);
+    expect(h.capturedCtx?.allowedPaths.has("Other/Archive")).toBe(true);
   });
 
   it("emits a state event for the classifying and review transitions", async () => {

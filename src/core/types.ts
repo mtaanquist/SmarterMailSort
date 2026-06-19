@@ -43,6 +43,12 @@ export interface Settings extends LlmConfig {
   maxRetries: number;
   /** Base delay for exponential backoff between retries, in milliseconds. */
   retryBaseMs: number;
+  /**
+   * Whether the model may move messages into folders in OTHER accounts. Off by
+   * default: moves stay within the source folder's account unless explicitly
+   * opted in.
+   */
+  allowCrossAccount: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -57,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   batchSize: 1,
   maxRetries: 3,
   retryBaseMs: 500,
+  allowCrossAccount: false,
 };
 
 /** A named, reusable sort instruction the user can pick from a dropdown. */
