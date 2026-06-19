@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatCompletion, LlmError, testConnection } from "../src/core/llmClient.js";
+import {
+  chatCompletion,
+  clearResponseFormatCache,
+  LlmError,
+  testConnection,
+} from "../src/core/llmClient.js";
 import type { LlmConfig } from "../src/core/types.js";
 
 const config: LlmConfig = {
@@ -8,7 +13,11 @@ const config: LlmConfig = {
   model: "llama3.1",
   temperature: 0,
   timeoutMs: 5000,
+  responseFormat: "auto",
 };
+
+// The format-negotiation cache is module-scoped; isolate it per test.
+afterEach(() => clearResponseFormatCache());
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -19,8 +28,12 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
-/** An error Response with optional headers (e.g. Retry-After). */
-function errorResponse(status: number, headers: Record<string, string> = {}): Response {
+/** An error Response with optional headers (e.g. Retry-After) and body text. */
+function errorResponse(
+  status: number,
+  headers: Record<string, string> = {},
+  body = "err",
+): Response {
   const lower = Object.fromEntries(
     Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
   );
@@ -29,8 +42,16 @@ function errorResponse(status: number, headers: Record<string, string> = {}): Re
     status,
     headers: { get: (k: string) => lower[k.toLowerCase()] ?? null },
     json: async () => ({}),
-    text: async () => "err",
+    text: async () => body,
   } as unknown as Response;
+}
+
+const SCHEMA = { name: "decision", schema: { type: "object" } };
+const formatError = '{"error":"\'response_format.type\' must be \'json_schema\' or \'text\'"}';
+
+/** Read the parsed request body from a fetch mock call. */
+function bodyOf(fetchMock: ReturnType<typeof vi.fn>, call = 0): Record<string, unknown> {
+  return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string);
 }
 
 const user = [{ role: "user" as const, content: "hi" }];
@@ -150,6 +171,78 @@ describe("chatCompletion (retries)", () => {
       chatCompletion(config, user, fetchMock, { signal: controller.signal, onRetry }),
     ).rejects.toBeInstanceOf(LlmError);
     expect(onRetry).not.toHaveBeenCalled();
+  });
+});
+
+describe("chatCompletion (response_format negotiation)", () => {
+  it("auto falls back from json_object to json_schema and remembers it", async () => {
+    let call = 0;
+    const fetchMock = vi.fn(async () => {
+      call++;
+      // First attempt (json_object) is rejected; json_schema is accepted.
+      return call === 1 ? errorResponse(400, {}, formatError) : jsonResponse(okBody);
+    });
+    const out = await chatCompletion(config, user, fetchMock, {
+      jsonMode: true,
+      jsonSchema: SCHEMA,
+    });
+    expect(out).toBe("ok");
+    expect(bodyOf(fetchMock, 0).response_format).toEqual({ type: "json_object" });
+    expect(bodyOf(fetchMock, 1).response_format).toMatchObject({ type: "json_schema" });
+
+    // A subsequent call should start straight at the remembered json_schema.
+    const out2 = await chatCompletion(config, user, fetchMock, {
+      jsonMode: true,
+      jsonSchema: SCHEMA,
+    });
+    expect(out2).toBe("ok");
+    expect(bodyOf(fetchMock, 2).response_format).toMatchObject({ type: "json_schema" });
+  });
+
+  it("auto falls back to plain text (no response_format) when schemas are rejected too", async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string) as { response_format?: unknown };
+      return body.response_format ? errorResponse(400, {}, formatError) : jsonResponse(okBody);
+    });
+    const out = await chatCompletion(config, user, fetchMock, {
+      jsonMode: true,
+      jsonSchema: SCHEMA,
+    });
+    expect(out).toBe("ok");
+    // Last attempt carried no response_format at all.
+    expect(bodyOf(fetchMock, fetchMock.mock.calls.length - 1).response_format).toBeUndefined();
+  });
+
+  it("does not fall back on a 400 unrelated to response_format", async () => {
+    const fetchMock = vi.fn(async () => errorResponse(400, {}, "bad request: model not found"));
+    await expect(
+      chatCompletion(config, user, fetchMock, { jsonMode: true, jsonSchema: SCHEMA }),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an explicit json_schema setting sends the schema and does not negotiate", async () => {
+    const fetchMock = vi.fn(async () => errorResponse(400, {}, formatError));
+    await expect(
+      chatCompletion({ ...config, responseFormat: "json_schema" }, user, fetchMock, {
+        jsonMode: true,
+        jsonSchema: SCHEMA,
+      }),
+    ).rejects.toBeInstanceOf(LlmError);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no fallback for an explicit mode
+    expect(bodyOf(fetchMock, 0).response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "decision", strict: true },
+    });
+  });
+
+  it("an explicit text setting sends no response_format", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(okBody));
+    await chatCompletion({ ...config, responseFormat: "text" }, user, fetchMock, {
+      jsonMode: true,
+      jsonSchema: SCHEMA,
+    });
+    expect(bodyOf(fetchMock, 0).response_format).toBeUndefined();
   });
 });
 

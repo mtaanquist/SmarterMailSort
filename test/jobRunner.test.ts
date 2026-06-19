@@ -24,6 +24,7 @@ const SETTINGS: Settings = {
   model: "m",
   temperature: 0,
   timeoutMs: 1000,
+  responseFormat: "auto",
   maxBodyChars: 100,
   concurrency: 1,
   batchSize: 1,

@@ -7,6 +7,8 @@ import { chatCompletion, type RetryInfo } from "../core/llmClient.js";
 import { JobRunner } from "../core/jobRunner.js";
 import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
 import {
+  BATCH_DECISION_SCHEMA,
+  DECISION_SCHEMA,
   buildBatchClassificationMessages,
   buildClassificationMessages,
 } from "../core/promptBuilder.js";
@@ -205,7 +207,10 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
 
   const classify = async (summary: MessageSummary): Promise<Decision> => {
     const messages = buildClassificationMessages(instruction, targets, summary);
-    const raw = await chatCompletion(settings, messages, fetch, chatOptions);
+    const raw = await chatCompletion(settings, messages, fetch, {
+      ...chatOptions,
+      jsonSchema: DECISION_SCHEMA,
+    });
     return parseDecision(raw, allowedPaths);
   };
 
@@ -219,7 +224,10 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
       targets,
       summaries,
     );
-    const raw = await chatCompletion(settings, messages, fetch, chatOptions);
+    const raw = await chatCompletion(settings, messages, fetch, {
+      ...chatOptions,
+      jsonSchema: BATCH_DECISION_SCHEMA,
+    });
     const byId = parseDecisions(
       raw,
       allowedPaths,

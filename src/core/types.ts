@@ -1,6 +1,13 @@
 // Pure data contracts shared across the extension. Nothing in this module
 // touches the `messenger.*` WebExtension API, so it can be unit-tested freely.
 
+/**
+ * How to ask the endpoint to enforce JSON output. Endpoints differ: OpenAI and
+ * Ollama accept `json_object`; LM Studio only accepts `json_schema` or plain
+ * text. "auto" tries them in order and remembers what the endpoint accepts.
+ */
+export type ResponseFormat = "auto" | "json_object" | "json_schema" | "text";
+
 /** Configuration for the OpenAI-compatible LLM endpoint. */
 export interface LlmConfig {
   /** Base URL, e.g. "http://localhost:11434" or "https://api.openai.com". */
@@ -13,6 +20,8 @@ export interface LlmConfig {
   temperature: number;
   /** Per-request timeout in milliseconds. */
   timeoutMs: number;
+  /** How to request JSON output; "auto" negotiates per endpoint. */
+  responseFormat: ResponseFormat;
 }
 
 /** All persisted user settings. */
@@ -42,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: "llama3.1",
   temperature: 0,
   timeoutMs: 60000,
+  responseFormat: "auto",
   maxBodyChars: 2000,
   concurrency: 1,
   batchSize: 1,
