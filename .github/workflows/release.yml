@@ -33,9 +33,17 @@ jobs:
       - name: Package XPI
         run: npm run package
 
+      - name: Create .xpi artifact
+        run: |
+          for f in web-ext-artifacts/*.zip; do
+            cp "$f" "${f%.zip}.xpi"
+          done
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: web-ext-artifacts/*.zip
+          files: |
+            web-ext-artifacts/*.zip
+            web-ext-artifacts/*.xpi
           generate_release_notes: true
           fail_on_unmatched_files: true
