@@ -23,6 +23,10 @@ const el = {
   progress: document.getElementById("progress") as HTMLProgressElement,
   progressText: document.getElementById("progress-text") as HTMLElement,
   progressNote: document.getElementById("progress-note") as HTMLElement,
+  resumePanel: document.getElementById("resume-panel") as HTMLElement,
+  resumeText: document.getElementById("resume-text") as HTMLElement,
+  resume: document.getElementById("resume") as HTMLButtonElement,
+  resumeDiscard: document.getElementById("resume-discard") as HTMLButtonElement,
   undoPanel: document.getElementById("undo-panel") as HTMLElement,
   undoText: document.getElementById("undo-text") as HTMLElement,
   undo: document.getElementById("undo") as HTMLButtonElement,
@@ -166,6 +170,19 @@ function renderFolderGroup(
   return details;
 }
 
+function renderResume(state: JobState): void {
+  const busy = state.phase === "classifying" || state.phase === "applying";
+  el.resumePanel.hidden = !state.resumable;
+  if (state.resumable) {
+    const folder =
+      folders.find((f) => f.id === state.resumable!.sourceFolderId)?.path ??
+      "a folder";
+    el.resumeText.textContent = `An interrupted run on ${folder} classified ${state.resumable.count} message(s). Resume to finish it (already-done messages are skipped) or discard it.`;
+  }
+  el.resume.disabled = busy;
+  el.resumeDiscard.disabled = busy;
+}
+
 function renderUndo(state: JobState): void {
   const busy = state.phase === "classifying" || state.phase === "applying";
   el.undoPanel.hidden = !state.undo;
@@ -179,6 +196,7 @@ function render(state: JobState): void {
   lastState = state;
   setError(state.error);
   renderProgress(state);
+  renderResume(state);
   renderUndo(state);
   renderReview(state);
 }
@@ -239,6 +257,18 @@ function wireEvents(): void {
     }
     ensurePort(); // receive the applying/done state transitions
     const res = await send({ type: "applyMoves", messageIds: ids });
+    if (!res.ok && "error" in res) setError(res.error);
+  });
+
+  el.resume.addEventListener("click", async () => {
+    setError(null);
+    ensurePort(); // stream progress for the resumed run
+    const res = await send({ type: "resume" });
+    if (!res.ok && "error" in res) setError(res.error);
+  });
+
+  el.resumeDiscard.addEventListener("click", async () => {
+    const res = await send({ type: "discardResume" });
     if (!res.ok && "error" in res) setError(res.error);
   });
 

@@ -4,17 +4,35 @@
 // `classify` + source), which makes every phase transition unit-testable.
 
 import { runClassification } from "./classifier.js";
-import type { BgEvent, JobNotice, JobState } from "./protocol.js";
 import type {
+  BgEvent,
+  JobNotice,
+  JobState,
+  ResumableSummary,
+} from "./protocol.js";
+import type {
+  ClassifiedMessage,
   Decision,
   FolderNode,
   FolderRef,
+  JobCheckpoint,
   MessageSummary,
   Settings,
   UndoItem,
   UndoOutcome,
   UndoRecord,
 } from "./types.js";
+
+/** A "keep" used when a batch result is missing an entry; mirrors classifier. */
+const OMITTED_DECISION: Decision = {
+  action: "keep",
+  folder: null,
+  reason: "model omitted a decision for this email",
+  confidence: 0,
+};
+
+/** How many newly-decided messages to accumulate between checkpoint writes. */
+const DEFAULT_CHECKPOINT_EVERY = 25;
 
 /** Outcome of moving one destination group; mirrors `moveBatched`. */
 export interface MoveOutcome {
@@ -65,8 +83,22 @@ export interface JobRunnerDeps {
   saveUndo: (record: UndoRecord) => Promise<void>;
   /** Forget the persisted undo record. */
   clearUndo: () => Promise<void>;
+  /** Load any persisted checkpoint of an interrupted classification run. */
+  loadCheckpoint: () => Promise<JobCheckpoint | null>;
+  /** Persist the current classification checkpoint. */
+  saveCheckpoint: (checkpoint: JobCheckpoint) => Promise<void>;
+  /** Forget the persisted checkpoint. */
+  clearCheckpoint: () => Promise<void>;
+  /** Toggle a keepalive (e.g. an alarm) that resists event-page suspension. */
+  setKeepalive: (active: boolean) => void;
   /** Sink for state/progress events (wired to port broadcast in production). */
   emit: (event: BgEvent) => void;
+}
+
+/** Tunables, primarily so tests can observe checkpointing at small sizes. */
+export interface JobRunnerOptions {
+  /** Newly-decided messages between checkpoint writes. */
+  checkpointEvery?: number;
 }
 
 /** Result of a request that may be rejected by a phase guard. */
@@ -82,6 +114,7 @@ function initialState(): JobState {
     error: null,
     stopped: false,
     undo: null,
+    resumable: null,
   };
 }
 
@@ -95,19 +128,52 @@ export class JobRunner {
   private abortController: AbortController | null = null;
   /** Full record backing `state.undo`; kept in memory and persisted via deps. */
   private undoRecord: UndoRecord | null = null;
+  /**
+   * Decisions made so far this run, keyed by RFC Message-ID. Seeded from a
+   * checkpoint on resume (to skip the LLM for already-decided messages) and
+   * grown as new results arrive (to persist progress).
+   */
+  private decided = new Map<string, Decision>();
+  /** Newly-decided messages since the last checkpoint write. */
+  private dirty = 0;
+  /** True while a run should keep persisting its checkpoint. */
+  private checkpointing = false;
+  /** The interrupted checkpoint loaded at startup, available to resume. */
+  private loadedCheckpoint: JobCheckpoint | null = null;
+  private readonly checkpointEvery: number;
 
-  constructor(private readonly deps: JobRunnerDeps) {}
+  constructor(
+    private readonly deps: JobRunnerDeps,
+    options: JobRunnerOptions = {},
+  ) {
+    this.checkpointEvery = Math.max(1, options.checkpointEvery ?? DEFAULT_CHECKPOINT_EVERY);
+  }
 
   /**
-   * Restore any persisted undo record (the event page may have suspended since
-   * the last apply). Safe to call once at startup; emits state if anything loads.
+   * Restore persisted state the event page may have lost to suspension/restart:
+   * the undo record and any interrupted-run checkpoint. Safe to call once at
+   * startup; emits state if anything loads.
    */
   async init(): Promise<void> {
-    const record = await this.deps.loadUndo();
-    if (record && record.items.length) {
-      this.setUndo(record);
-      this.emitState();
+    const [undoRecord, checkpoint] = await Promise.all([
+      this.deps.loadUndo(),
+      this.deps.loadCheckpoint(),
+    ]);
+    let changed = false;
+    if (undoRecord && undoRecord.items.length) {
+      this.setUndo(undoRecord);
+      changed = true;
     }
+    if (checkpoint && checkpoint.decisions.length) {
+      this.loadedCheckpoint = checkpoint;
+      this.setResumable({
+        sourceFolderId: checkpoint.sourceFolderId,
+        instruction: checkpoint.instruction,
+        count: checkpoint.decisions.length,
+      });
+      changed = true;
+    }
+    if (changed) this.emitState();
   }
 
   /** Current snapshot, e.g. to seed a newly connected UI port. */
@@ -117,9 +183,46 @@ export class JobRunner {
 
   /** Begin classifying `sourceFolderId`. Rejected if a job is already running. */
   start(sourceFolderId: string, instruction: string): JobActionResult {
-    if (this.state.phase === "classifying" || this.state.phase === "applying") {
-      return { ok: false, error: "a job is already running" };
-    }
+    if (this.isBusy()) return { ok: false, error: "a job is already running" };
+    // A fresh run starts with no cached decisions and drops any stale checkpoint.
+    this.decided = new Map();
+    this.loadedCheckpoint = null;
+    void this.deps.clearCheckpoint();
+    this.beginRun(sourceFolderId, instruction);
+    return { ok: true };
+  }
+
+  /** Resume an interrupted run loaded at startup, skipping decided messages. */
+  resume(): JobActionResult {
+    if (this.isBusy()) return { ok: false, error: "a job is already running" };
+    const checkpoint = this.loadedCheckpoint;
+    if (!checkpoint) return { ok: false, error: "nothing to resume" };
+    // Seed the cache so already-decided messages skip the LLM on this pass.
+    this.decided = new Map(
+      checkpoint.decisions.map((d) => [d.headerMessageId, d.decision]),
+    );
+    this.beginRun(checkpoint.sourceFolderId, checkpoint.instruction);
+    return { ok: true };
+  }
+
+  /** Forget an interrupted run without resuming it. */
+  discardResume(): JobActionResult {
+    if (this.isBusy()) return { ok: false, error: "a job is already running" };
+    this.decided = new Map();
+    this.loadedCheckpoint = null;
+    this.checkpointing = false;
+    this.setResumable(null);
+    void this.deps.clearCheckpoint();
+    this.emitState();
+    return { ok: true };
+  }
+
+  private isBusy(): boolean {
+    return this.state.phase === "classifying" || this.state.phase === "applying";
+  }
+
+  /** Shared setup for start/resume: reset run state and kick off classification. */
+  private beginRun(sourceFolderId: string, instruction: string): void {
     this.state.phase = "classifying";
     this.state.sourceFolderId = sourceFolderId;
     this.state.instruction = instruction;
@@ -127,14 +230,16 @@ export class JobRunner {
     this.state.error = null;
     this.state.stopped = false;
     this.state.progress = { processed: 0, total: null };
-    // A new run invalidates any undo from the previous apply.
+    // Starting/resuming clears the "resume?" prompt and any previous undo.
+    this.setResumable(null);
     this.setUndo(null);
     void this.deps.clearUndo();
+    this.checkpointing = true;
+    this.dirty = 0;
     this.emitState();
 
     this.abortController = new AbortController();
     void this.runJob(sourceFolderId, instruction, this.abortController.signal);
-    return { ok: true };
   }
 
   /** Cooperatively cancel an in-flight classification run. */
@@ -182,11 +287,36 @@ export class JobRunner {
     this.state.undo = record ? { count: record.items.length } : null;
   }
 
+  private setResumable(summary: ResumableSummary | null): void {
+    this.state.resumable = summary;
+  }
+
+  /** Snapshot the decisions made so far as a persistable checkpoint. */
+  private buildCheckpoint(): JobCheckpoint | null {
+    if (!this.state.sourceFolderId) return null;
+    return {
+      sourceFolderId: this.state.sourceFolderId,
+      instruction: this.state.instruction,
+      decisions: [...this.decided].map(([headerMessageId, decision]) => ({
+        headerMessageId,
+        decision,
+      })),
+    };
+  }
+
+  /** Write the current checkpoint, unless this run has stopped checkpointing. */
+  private async flushCheckpoint(): Promise<void> {
+    if (!this.checkpointing) return;
+    const checkpoint = this.buildCheckpoint();
+    if (checkpoint) await this.deps.saveCheckpoint(checkpoint);
+  }
+
   private async runJob(
     sourceFolderId: string,
     instruction: string,
     signal: AbortSignal,
   ): Promise<void> {
+    this.deps.setKeepalive(true);
     try {
       const settings = await this.deps.loadSettings();
       const nodes = await this.deps.listFolders();
@@ -199,7 +329,7 @@ export class JobRunner {
         .map((n) => ({ id: n.id, path: n.path }));
       if (sourcePath) allowedPaths.delete(sourcePath);
 
-      const { classify, classifyBatch } = this.deps.createClassifiers({
+      const raw = this.deps.createClassifiers({
         instruction,
         settings,
         targets,
@@ -210,25 +340,81 @@ export class JobRunner {
 
       const results = await runClassification({
         source: this.deps.summarise(sourceFolderId, settings.maxBodyChars),
-        classify,
-        classifyBatch,
+        // Skip the LLM for messages already decided in a prior (resumed) pass.
+        classify: (summary) => this.cachedOrClassify(summary, raw),
+        classifyBatch: (summaries) => this.cachedOrClassifyBatch(summaries, raw),
         concurrency: settings.concurrency,
         batchSize: settings.batchSize,
         signal,
         onProgress: (progress) => {
           this.state.progress = progress;
+          this.recordDecision(progress.lastResult);
           this.deps.emit({ type: "progress", progress });
         },
       });
       this.state.results = results;
       this.state.stopped = signal.aborted;
       this.state.phase = "review";
+      // Classification finished; the checkpoint has served its purpose.
+      this.checkpointing = false;
+      this.decided = new Map();
+      this.loadedCheckpoint = null;
+      this.setResumable(null);
+      await this.deps.clearCheckpoint();
     } catch (err) {
       this.state.error = (err as Error).message;
       this.state.phase = "idle";
+      // Keep whatever progress we made so the run can be resumed later.
+      this.checkpointing = false;
+      const checkpoint = this.decided.size ? this.buildCheckpoint() : null;
+      if (checkpoint) {
+        await this.deps.saveCheckpoint(checkpoint);
+        this.loadedCheckpoint = checkpoint;
+        this.setResumable({
+          sourceFolderId: checkpoint.sourceFolderId,
+          instruction: checkpoint.instruction,
+          count: checkpoint.decisions.length,
+        });
+      } else {
+        await this.deps.clearCheckpoint();
+      }
     } finally {
+      this.deps.setKeepalive(false);
       this.abortController = null;
       this.emitState();
+    }
+  }
+
+  /** Return a cached decision for `summary` if present, else run the LLM. */
+  private cachedOrClassify(
+    summary: MessageSummary,
+    raw: Classifiers,
+  ): Promise<Decision> {
+    const hit = this.decided.get(summary.headerMessageId);
+    return hit ? Promise.resolve(hit) : raw.classify(summary);
+  }
+
+  /** Batch variant: send only undecided messages to the LLM, merge the cache. */
+  private async cachedOrClassifyBatch(
+    summaries: MessageSummary[],
+    raw: Classifiers,
+  ): Promise<Decision[]> {
+    const undecided = summaries.filter((s) => !this.decided.has(s.headerMessageId));
+    const fresh = undecided.length ? await raw.classifyBatch(undecided) : [];
+    const byId = new Map<number, Decision>();
+    undecided.forEach((s, i) => byId.set(s.id, fresh[i]));
+    return summaries.map(
+      (s) => this.decided.get(s.headerMessageId) ?? byId.get(s.id) ?? OMITTED_DECISION,
+    );
+  }
+
+  /** Fold a freshly resolved result into the checkpoint, flushing every N. */
+  private recordDecision(result: ClassifiedMessage | undefined): void {
+    if (!result || result.error || !result.summary.headerMessageId) return;
+    this.decided.set(result.summary.headerMessageId, result.decision);
+    if (++this.dirty >= this.checkpointEvery) {
+      this.dirty = 0;
+      void this.flushCheckpoint();
     }
   }
 

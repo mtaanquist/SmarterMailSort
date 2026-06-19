@@ -18,7 +18,9 @@ export type UiRequest =
   | { type: "abort" }
   | { type: "getState" }
   | { type: "applyMoves"; messageIds: number[] }
-  | { type: "undo" };
+  | { type: "undo" }
+  | { type: "resume" }
+  | { type: "discardResume" };
 
 /** Phase of the background job state machine. */
 export type JobPhase = "idle" | "classifying" | "review" | "applying" | "done";
@@ -26,6 +28,14 @@ export type JobPhase = "idle" | "classifying" | "review" | "applying" | "done";
 /** Lightweight, UI-facing view of the available "undo last apply". */
 export interface UndoSummary {
   /** Number of messages that can be moved back. */
+  count: number;
+}
+
+/** UI-facing view of an interrupted run that can be resumed. */
+export interface ResumableSummary {
+  sourceFolderId: string;
+  instruction: string;
+  /** How many messages had already been classified before interruption. */
   count: number;
 }
 
@@ -41,6 +51,8 @@ export interface JobState {
   stopped: boolean;
   /** Present when the most recent apply can be undone; else null. */
   undo: UndoSummary | null;
+  /** Present when an interrupted run is available to resume; else null. */
+  resumable: ResumableSummary | null;
 }
 
 /** A transient, non-state message surfaced to the UI (e.g. a retry notice). */

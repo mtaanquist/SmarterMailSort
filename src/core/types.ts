@@ -137,3 +137,21 @@ export interface UndoOutcome {
   restored: number;
   failures: UndoFailure[];
 }
+
+/** One already-classified message, keyed by its move-stable RFC Message-ID. */
+export interface CheckpointDecision {
+  headerMessageId: string;
+  decision: Decision;
+}
+
+/**
+ * Incremental checkpoint of an in-progress classification run, persisted so a
+ * run interrupted by event-page suspension or a restart can resume without
+ * re-running the LLM over messages already decided. Intentionally small: it
+ * stores decisions keyed by Message-ID, not full summaries.
+ */
+export interface JobCheckpoint {
+  sourceFolderId: string;
+  instruction: string;
+  decisions: CheckpointDecision[];
+}

@@ -26,7 +26,7 @@ describe("manifest invariants", () => {
   });
 
   it("declares the permissions the extension relies on", () => {
-    for (const perm of ["accountsRead", "messagesRead", "messagesMove", "menus", "storage"]) {
+    for (const perm of ["accountsRead", "messagesRead", "messagesMove", "menus", "storage", "alarms"]) {
       expect(manifest.permissions).toContain(perm);
     }
   });

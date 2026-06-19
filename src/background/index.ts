@@ -22,6 +22,11 @@ import {
 } from "../platform/messages.js";
 import { loadSettings, saveSettings } from "../platform/settings.js";
 import { clearUndo, loadUndo, saveUndo } from "../platform/undoStore.js";
+import {
+  clearCheckpoint,
+  loadCheckpoint,
+  saveCheckpoint,
+} from "../platform/checkpointStore.js";
 
 const ports = new Set<browser.runtime.Port>();
 // Id of our dedicated app tab, tracked so we can refocus it without needing
@@ -35,6 +40,32 @@ function broadcast(event: BgEvent): void {
     } catch {
       ports.delete(port);
     }
+  }
+}
+
+// A periodic alarm whose only job is to wake the event page often enough that an
+// active classification run is less likely to be suspended mid-flight. The
+// checkpoint is the real safety net; this just reduces interruptions.
+const KEEPALIVE_ALARM = "smartermailsort-keepalive";
+
+// The thunderbird-webext-browser types omit the alarms API (Thunderbird supports
+// it at runtime with the "alarms" permission), so we reach it via a minimal shape.
+interface AlarmsApi {
+  create(name: string, info: { periodInMinutes?: number }): void;
+  clear(name: string): Promise<boolean>;
+  onAlarm: { addListener(cb: (alarm: { name: string }) => void): void };
+}
+const alarms = (messenger as unknown as { alarms: AlarmsApi }).alarms;
+
+function setKeepalive(active: boolean): void {
+  try {
+    if (active) {
+      alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+    } else {
+      void alarms.clear(KEEPALIVE_ALARM);
+    }
+  } catch (err) {
+    console.warn("SmarterMailSort: keepalive alarm failed", err);
   }
 }
 
@@ -81,6 +112,15 @@ function registerEntryPoints(): void {
   messenger.tabs.onRemoved.addListener((tabId) => {
     if (tabId === appTabId) appTabId = undefined;
   });
+
+  // The keepalive alarm needs a listener so firing it wakes the event page.
+  try {
+    alarms.onAlarm.addListener(() => {
+      /* wake-only: nothing to do, the wake itself is the point */
+    });
+  } catch (err) {
+    console.error("SmarterMailSort: failed to register keepalive listener", err);
+  }
 
   try {
     messenger.menus.onClicked.addListener((info) => {
@@ -196,6 +236,10 @@ const runner = new JobRunner({
   loadUndo,
   saveUndo,
   clearUndo,
+  loadCheckpoint,
+  saveCheckpoint,
+  clearCheckpoint,
+  setKeepalive,
   emit: broadcast,
 });
 
@@ -235,6 +279,10 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return runner.apply(request.messageIds);
       case "undo":
         return runner.undo();
+      case "resume":
+        return runner.resume();
+      case "discardResume":
+        return runner.discardResume();
       default:
         return { ok: false, error: "unknown request" };
     }

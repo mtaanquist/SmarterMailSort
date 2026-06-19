@@ -11,6 +11,7 @@ import type { BgEvent } from "../src/core/protocol.js";
 import type {
   Decision,
   FolderNode,
+  JobCheckpoint,
   MessageSummary,
   Settings,
   UndoOutcome,
@@ -71,13 +72,21 @@ interface Harness {
   /** Phase snapshotted at each emit time (events hold a live state reference). */
   phaseLog: string[];
   capturedCtx: ClassifierContext | null;
+  /** Message ids actually sent to the (LLM) classifier, to prove cache skips. */
+  classifyCalls: number[];
   moveMessages: ReturnType<typeof vi.fn>;
   undoMoves: ReturnType<typeof vi.fn>;
   saveUndo: ReturnType<typeof vi.fn>;
   clearUndo: ReturnType<typeof vi.fn>;
+  saveCheckpoint: ReturnType<typeof vi.fn>;
+  clearCheckpoint: ReturnType<typeof vi.fn>;
+  setKeepalive: ReturnType<typeof vi.fn>;
 }
 
-function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
+function makeRunner(
+  overrides: Partial<JobRunnerDeps> = {},
+  options: { checkpointEvery?: number } = {},
+): Harness {
   const events: BgEvent[] = [];
   const phaseLog: string[] = [];
   const harness: Harness = {
@@ -85,12 +94,16 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
     events,
     phaseLog,
     capturedCtx: null,
+    classifyCalls: [],
     moveMessages: vi.fn(async (): Promise<MoveOutcome[]> => []),
     undoMoves: vi.fn(
       async (): Promise<UndoOutcome> => ({ restored: 0, failures: [] }),
     ),
     saveUndo: vi.fn(async () => {}),
     clearUndo: vi.fn(async () => {}),
+    saveCheckpoint: vi.fn(async () => {}),
+    clearCheckpoint: vi.fn(async () => {}),
+    setKeepalive: vi.fn(),
   };
 
   const ids = [1, 2, 3];
@@ -104,8 +117,14 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
     createClassifiers: (ctx): Classifiers => {
       harness.capturedCtx = ctx;
       return {
-        classify: async (s) => defaultDecision(s),
-        classifyBatch: async (ss) => ss.map(defaultDecision),
+        classify: async (s) => {
+          harness.classifyCalls.push(s.id);
+          return defaultDecision(s);
+        },
+        classifyBatch: async (ss) => {
+          for (const s of ss) harness.classifyCalls.push(s.id);
+          return ss.map(defaultDecision);
+        },
       };
     },
     moveMessages: harness.moveMessages,
@@ -113,6 +132,10 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
     loadUndo: async () => null,
     saveUndo: harness.saveUndo,
     clearUndo: harness.clearUndo,
+    loadCheckpoint: async () => null,
+    saveCheckpoint: harness.saveCheckpoint,
+    clearCheckpoint: harness.clearCheckpoint,
+    setKeepalive: harness.setKeepalive,
     emit: (e) => {
       events.push(e);
       if (e.type === "state") phaseLog.push(e.state.phase);
@@ -120,7 +143,7 @@ function makeRunner(overrides: Partial<JobRunnerDeps> = {}): Harness {
     ...overrides,
   };
 
-  harness.runner = new JobRunner(deps);
+  harness.runner = new JobRunner(deps, { checkpointEvery: 1, ...options });
   return harness;
 }
 
@@ -377,5 +400,135 @@ describe("JobRunner.undo", () => {
     expect(h.runner.getState().undo).toBeNull();
     expect(h.clearUndo).toHaveBeenCalled();
     await waitFor(() => h.runner.getState().phase === "review");
+  });
+});
+
+describe("JobRunner checkpoint + resume", () => {
+  it("toggles the keepalive around a run and persists a checkpoint", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+
+    expect(h.setKeepalive).toHaveBeenNthCalledWith(1, true);
+    expect(h.setKeepalive).toHaveBeenLastCalledWith(false);
+    // checkpointEvery:1 -> a write per decided message during the run.
+    expect(h.saveCheckpoint).toHaveBeenCalled();
+    const cp = h.saveCheckpoint.mock.calls.at(-1)![0] as JobCheckpoint;
+    expect(cp.sourceFolderId).toBe("src");
+    expect(cp.decisions.map((d) => d.headerMessageId)).toContain(
+      "<msg-1@example.com>",
+    );
+  });
+
+  it("clears the checkpoint once classification completes", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(h.clearCheckpoint).toHaveBeenCalled();
+    expect(h.runner.getState().resumable).toBeNull();
+  });
+
+  it("does not checkpoint errored messages", async () => {
+    const h = makeRunner({
+      createClassifiers: (ctx) => {
+        h.capturedCtx = ctx;
+        return {
+          classify: async (s) => {
+            if (s.id === 1) throw new Error("boom");
+            return defaultDecision(s);
+          },
+          classifyBatch: async (ss) => ss.map(defaultDecision),
+        };
+      },
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    const everyDecision = h.saveCheckpoint.mock.calls.flatMap(
+      (c) => (c[0] as JobCheckpoint).decisions,
+    );
+    expect(everyDecision.some((d) => d.headerMessageId === "<msg-1@example.com>")).toBe(
+      false,
+    );
+  });
+
+  it("keeps a checkpoint and offers resume when a run is interrupted", async () => {
+    // Source throws after yielding the first message: progress, then failure.
+    const h = makeRunner({
+      summarise: async function* () {
+        yield summary(1);
+        throw new Error("suspended");
+      },
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "idle");
+    expect(h.runner.getState().resumable).toMatchObject({ sourceFolderId: "src" });
+    expect(h.saveCheckpoint).toHaveBeenCalled();
+    // Only the start-time stale-clear; the interruption itself keeps the record.
+    expect(h.clearCheckpoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads a checkpoint on init and exposes it as resumable", async () => {
+    const checkpoint: JobCheckpoint = {
+      sourceFolderId: "src",
+      instruction: "sort it",
+      decisions: [
+        { headerMessageId: "<msg-1@example.com>", decision: move("Acc/Archive") },
+      ],
+    };
+    const h = makeRunner({ loadCheckpoint: async () => checkpoint });
+    await h.runner.init();
+    expect(h.runner.getState().resumable).toEqual({
+      sourceFolderId: "src",
+      instruction: "sort it",
+      count: 1,
+    });
+  });
+
+  it("resume skips the LLM for already-decided messages", async () => {
+    const checkpoint: JobCheckpoint = {
+      sourceFolderId: "src",
+      instruction: "sort it",
+      decisions: [
+        { headerMessageId: "<msg-1@example.com>", decision: move("Acc/Archive") },
+      ],
+    };
+    const h = makeRunner({ loadCheckpoint: async () => checkpoint });
+    await h.runner.init();
+    expect(h.runner.resume()).toEqual({ ok: true });
+    await waitFor(() => h.runner.getState().phase === "review");
+
+    // msg 1 was cached -> not re-sent to the classifier; 2 and 3 were.
+    expect(h.classifyCalls).not.toContain(1);
+    expect(h.classifyCalls).toEqual(expect.arrayContaining([2, 3]));
+    // The full result set still covers all three, in source order.
+    expect(h.runner.getState().results.map((r) => r.summary.id)).toEqual([1, 2, 3]);
+    expect(h.runner.getState().results[0].decision.action).toBe("move");
+  });
+
+  it("rejects resume when there is nothing to resume", () => {
+    const h = makeRunner();
+    expect(h.runner.resume()).toEqual({ ok: false, error: "nothing to resume" });
+  });
+
+  it("discards a resumable checkpoint", async () => {
+    const checkpoint: JobCheckpoint = {
+      sourceFolderId: "src",
+      instruction: "sort it",
+      decisions: [
+        { headerMessageId: "<msg-1@example.com>", decision: move("Acc/Archive") },
+      ],
+    };
+    const h = makeRunner({ loadCheckpoint: async () => checkpoint });
+    await h.runner.init();
+    expect(h.runner.discardResume()).toEqual({ ok: true });
+    expect(h.runner.getState().resumable).toBeNull();
+    expect(h.clearCheckpoint).toHaveBeenCalled();
+  });
+
+  it("clears any stale checkpoint when a fresh job starts", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(h.clearCheckpoint).toHaveBeenCalled();
   });
 });
