@@ -36,7 +36,6 @@ function readForm(): Settings {
     batchSize: Number($("batchSize").value),
     maxRetries: Number($("maxRetries").value),
     retryBaseMs: Number($("retryBaseMs").value),
-    allowCrossAccount: $("allowCrossAccount").checked,
   };
 }
 
@@ -52,7 +51,6 @@ function writeForm(s: Settings): void {
   $("batchSize").value = String(s.batchSize);
   $("maxRetries").value = String(s.maxRetries);
   $("retryBaseMs").value = String(s.retryBaseMs);
-  $("allowCrossAccount").checked = s.allowCrossAccount;
 }
 
 /**

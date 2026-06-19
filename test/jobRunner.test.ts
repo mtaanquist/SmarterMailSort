@@ -30,7 +30,6 @@ const SETTINGS: Settings = {
   batchSize: 1,
   maxRetries: 3,
   retryBaseMs: 500,
-  allowCrossAccount: false,
 };
 
 const FOLDERS: FolderNode[] = [
@@ -204,19 +203,24 @@ describe("JobRunner.start", () => {
     expect(h.capturedCtx?.allowedPaths.has("Other/Archive")).toBe(false);
   });
 
-  it("includes other accounts when allowCrossAccount is enabled", async () => {
+  it("includes other accounts when the run opts into cross-account", async () => {
     const crossAccount: FolderNode[] = [
       ...FOLDERS,
       { id: "other", path: "Other/Archive", depth: 1, accountName: "Other" },
     ];
-    const h = makeRunner({
-      listFolders: async () => crossAccount,
-      loadSettings: async () => ({ ...SETTINGS, allowCrossAccount: true }),
-    });
-    h.runner.start("src", "x");
+    const h = makeRunner({ listFolders: async () => crossAccount });
+    h.runner.start("src", "x", true); // per-run opt-in
     await waitFor(() => h.runner.getState().phase === "review");
     expect(h.capturedCtx?.targets.map((t) => t.id)).toEqual(["fA", "fB", "other"]);
     expect(h.capturedCtx?.allowedPaths.has("Other/Archive")).toBe(true);
+  });
+
+  it("records the cross-account choice in the checkpoint for resume", async () => {
+    const h = makeRunner();
+    h.runner.start("src", "x", true);
+    await waitFor(() => h.runner.getState().phase === "review");
+    const cp = h.saveCheckpoint.mock.calls.at(-1)![0] as JobCheckpoint;
+    expect(cp.allowCrossAccount).toBe(true);
   });
 
   it("emits a state event for the classifying and review transitions", async () => {

@@ -23,6 +23,7 @@ const el = {
   deletePreset: document.getElementById("delete-preset") as HTMLButtonElement,
   start: document.getElementById("start") as HTMLButtonElement,
   abort: document.getElementById("abort") as HTMLButtonElement,
+  crossAccount: document.getElementById("cross-account") as HTMLInputElement,
   settingsLink: document.getElementById("settings-link") as HTMLAnchorElement,
   progressPanel: document.getElementById("progress-panel") as HTMLElement,
   progress: document.getElementById("progress") as HTMLProgressElement,
@@ -345,6 +346,7 @@ function wireEvents(): void {
       type: "startClassify",
       sourceFolderId: el.folder.value,
       instruction,
+      allowCrossAccount: el.crossAccount.checked,
     });
     if (!res.ok && "error" in res) setError(res.error);
   });

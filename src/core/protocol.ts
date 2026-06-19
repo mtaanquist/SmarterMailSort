@@ -15,7 +15,12 @@ export type UiRequest =
   | { type: "saveSettings"; settings: Settings }
   | { type: "testConnection"; settings: Settings }
   | { type: "listFolders" }
-  | { type: "startClassify"; sourceFolderId: string; instruction: string }
+  | {
+      type: "startClassify";
+      sourceFolderId: string;
+      instruction: string;
+      allowCrossAccount: boolean;
+    }
   | { type: "abort" }
   | { type: "getState" }
   | { type: "applyMoves"; messageIds: number[] }

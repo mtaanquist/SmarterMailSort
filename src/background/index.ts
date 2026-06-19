@@ -295,7 +295,11 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "startClassify":
         // Remember the instruction so the UI can prefill it next time.
         void saveLastInstruction(request.instruction);
-        return runner.start(request.sourceFolderId, request.instruction);
+        return runner.start(
+          request.sourceFolderId,
+          request.instruction,
+          request.allowCrossAccount,
+        );
       case "abort":
         runner.abort();
         return { ok: true };
