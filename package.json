@@ -1,6 +1,6 @@
 {
   "name": "smartermailsort",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Thunderbird MailExtension that sorts mail folders with an OpenAI-compatible LLM.",
   "type": "module",
   "private": true,
