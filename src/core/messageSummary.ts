@@ -117,3 +117,39 @@ export function buildSummary(
     bodyExcerpt,
   };
 }
+
+/**
+ * Build a header-only summary from a folder-listing header, WITHOUT fetching the
+ * message body (no `getFull` call). Used by the triage-first pass: the model
+ * decides from sender/subject/date alone, and only ambiguous messages are later
+ * hydrated with their body via {@link hydrateSummary}.
+ */
+export function buildHeaderSummary(header: RawHeader): MessageSummary {
+  return {
+    id: header.id,
+    headerMessageId: header.headerMessageId ?? "",
+    author: header.author ?? "",
+    recipients: header.recipients ?? [],
+    ccList: header.ccList ?? [],
+    subject: header.subject ?? "",
+    date: normaliseDate(header.date),
+    headers: {},
+    bodyExcerpt: "",
+  };
+}
+
+/**
+ * Fill in the body excerpt and interesting headers of a previously header-only
+ * summary, given its now-fetched full MIME part. Preserves the header fields
+ * already resolved; only the body-derived parts are added.
+ */
+export function hydrateSummary(
+  summary: MessageSummary,
+  full: RawPart | undefined,
+  maxBodyChars: number,
+): MessageSummary {
+  const body = extractBody(full);
+  const bodyExcerpt =
+    body.length > maxBodyChars ? body.slice(0, maxBodyChars) : body;
+  return { ...summary, headers: pickHeaders(full), bodyExcerpt };
+}

@@ -23,6 +23,30 @@ export const SYSTEM_PROMPT = [
   "- If you are unsure, prefer keep.",
 ].join("\n");
 
+/**
+ * System prompt for the first-pass triage over a HEADER-ONLY summary (no body).
+ * Adds a third "unsure" action so the model can defer a decision it can't make
+ * confidently from the sender and subject alone; those messages are then fetched
+ * in full and re-classified with {@link SYSTEM_PROMPT}.
+ */
+export const TRIAGE_SYSTEM_PROMPT = [
+  "You are an email-sorting assistant integrated into a mail client.",
+  "You are shown only an email's sender, subject, and date — NOT its body.",
+  "For the email, decide whether to KEEP it in place, MOVE it to exactly one of",
+  "the destination folders provided, or — if the sender and subject are not",
+  "enough to decide confidently — answer UNSURE so the full message can be",
+  "fetched and shown to you.",
+  "",
+  "Rules:",
+  "- Respond with a single JSON object and nothing else.",
+  '- Schema: {"action":"move"|"keep"|"unsure","folder":<one of the listed folder paths or null>,"reason":<short string>,"confidence":<number 0..1>}.',
+  "- Decide (move or keep) when the sender and subject already make the right destination clear.",
+  '- Answer "unsure" only when reading the body would likely change your decision; do not overuse it.',
+  '- When action is "keep" or "unsure", folder MUST be null.',
+  '- When action is "move", folder MUST be EXACTLY one of the destination folder paths listed, copied verbatim.',
+  "- Never invent a folder that is not in the list.",
+].join("\n");
+
 /** A named JSON Schema for endpoints that enforce `response_format: json_schema`. */
 export interface NamedSchema {
   name: string;
@@ -36,6 +60,11 @@ const DECISION_PROPS = {
   confidence: { type: "number" },
 } as const;
 
+const TRIAGE_DECISION_PROPS = {
+  ...DECISION_PROPS,
+  action: { type: "string", enum: ["move", "keep", "unsure"] },
+} as const;
+
 /** Schema matching the single-decision shape in {@link SYSTEM_PROMPT}. */
 export const DECISION_SCHEMA: NamedSchema = {
   name: "email_decision",
@@ -44,6 +73,17 @@ export const DECISION_SCHEMA: NamedSchema = {
     additionalProperties: false,
     required: ["action", "folder", "reason", "confidence"],
     properties: DECISION_PROPS,
+  },
+};
+
+/** Schema matching the single triage shape in {@link TRIAGE_SYSTEM_PROMPT}. */
+export const TRIAGE_DECISION_SCHEMA: NamedSchema = {
+  name: "email_triage",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["action", "folder", "reason", "confidence"],
+    properties: TRIAGE_DECISION_PROPS,
   },
 };
 
@@ -62,6 +102,27 @@ export const BATCH_DECISION_SCHEMA: NamedSchema = {
           additionalProperties: false,
           required: ["id", "action", "folder", "reason", "confidence"],
           properties: { id: { type: "number" }, ...DECISION_PROPS },
+        },
+      },
+    },
+  },
+};
+
+/** Schema matching the batched triage shape in {@link BATCH_TRIAGE_SYSTEM_PROMPT}. */
+export const BATCH_TRIAGE_DECISION_SCHEMA: NamedSchema = {
+  name: "email_triage_batch",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "action", "folder", "reason", "confidence"],
+          properties: { id: { type: "number" }, ...TRIAGE_DECISION_PROPS },
         },
       },
     },
@@ -88,6 +149,29 @@ export const BATCH_SYSTEM_PROMPT = [
   "- If you are unsure about an email, prefer keep.",
 ].join("\n");
 
+/**
+ * Batched counterpart to {@link TRIAGE_SYSTEM_PROMPT}: header-only triage over a
+ * numbered list, with the extra "unsure" action per email.
+ */
+export const BATCH_TRIAGE_SYSTEM_PROMPT = [
+  "You are an email-sorting assistant integrated into a mail client.",
+  "You are given a numbered list of emails, each shown by sender, subject, and",
+  "date only — NOT its body. For EACH email, decide whether to KEEP it in place,",
+  "MOVE it to exactly one of the destination folders, or — if the sender and",
+  "subject are not enough to decide confidently — answer UNSURE so its full",
+  "message can be fetched and shown to you.",
+  "",
+  "Rules:",
+  '- Respond with a single JSON object and nothing else.',
+  '- Schema: {"results":[{"id":<the email id>,"action":"move"|"keep"|"unsure","folder":<one of the listed folder paths or null>,"reason":<short string>,"confidence":<number 0..1>}]}.',
+  "- Include EXACTLY one result object per email, each carrying that email's id.",
+  "- Decide (move or keep) when the sender and subject already make the destination clear.",
+  '- Answer "unsure" only when reading the body would likely change your decision; do not overuse it.',
+  '- When action is "keep" or "unsure", folder MUST be null.',
+  '- When action is "move", folder MUST be EXACTLY one of the destination folder paths listed, copied verbatim.',
+  "- Never invent a folder that is not in the list.",
+].join("\n");
+
 function renderSummary(summary: MessageSummary, id?: number): string {
   const lines =
     id === undefined
@@ -103,9 +187,13 @@ function renderSummary(summary: MessageSummary, id?: number): string {
   for (const [name, value] of Object.entries(summary.headers)) {
     lines.push(`${name}: ${value}`);
   }
-  lines.push("");
-  lines.push("Body excerpt:");
-  lines.push(summary.bodyExcerpt || "(empty)");
+  // Triage summaries carry no body; omit the section entirely so the prompt
+  // stays a true subject-only payload rather than padding it with "(empty)".
+  if (summary.bodyExcerpt) {
+    lines.push("");
+    lines.push("Body excerpt:");
+    lines.push(summary.bodyExcerpt);
+  }
   return lines.join("\n");
 }
 
@@ -114,11 +202,14 @@ function renderSummary(summary: MessageSummary, id?: number): string {
  * @param instruction free-text user instruction (e.g. "move newsletters to ...")
  * @param folders the existing folders the model may target
  * @param summary the message to classify
+ * @param systemPrompt which system prompt to use (defaults to the full-body
+ *   prompt; pass {@link TRIAGE_SYSTEM_PROMPT} for the header-only triage pass)
  */
 export function buildClassificationMessages(
   instruction: string,
   folders: FolderRef[],
   summary: MessageSummary,
+  systemPrompt: string = SYSTEM_PROMPT,
 ): ChatMessage[] {
   const user = [
     `User instruction: ${instruction.trim()}`,
@@ -131,7 +222,7 @@ export function buildClassificationMessages(
   ].join("\n");
 
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     { role: "user", content: user },
   ];
 }
@@ -143,11 +234,14 @@ export function buildClassificationMessages(
  * @param instruction free-text user instruction
  * @param folders the existing folders the model may target
  * @param summaries the messages to classify in this batch
+ * @param systemPrompt which system prompt to use (defaults to the full-body
+ *   batch prompt; pass {@link BATCH_TRIAGE_SYSTEM_PROMPT} for triage)
  */
 export function buildBatchClassificationMessages(
   instruction: string,
   folders: FolderRef[],
   summaries: MessageSummary[],
+  systemPrompt: string = BATCH_SYSTEM_PROMPT,
 ): ChatMessage[] {
   const emails = summaries
     .map(
@@ -169,7 +263,7 @@ export function buildBatchClassificationMessages(
   ].join("\n");
 
   return [
-    { role: "system", content: BATCH_SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     { role: "user", content: user },
   ];
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BATCH_SYSTEM_PROMPT,
+  BATCH_TRIAGE_SYSTEM_PROMPT,
+  TRIAGE_SYSTEM_PROMPT,
   buildBatchClassificationMessages,
   buildClassificationMessages,
   SYSTEM_PROMPT,
@@ -74,5 +76,45 @@ describe("buildBatchClassificationMessages", () => {
     expect(user).toContain("- Local Folders/archive");
     // Folder list rendered once, not per-email.
     expect(user.match(/- Local Folders\/archive/g)).toHaveLength(1);
+  });
+});
+
+describe("triage prompt selection", () => {
+  it("uses the triage system prompt when one is passed", () => {
+    const m = buildClassificationMessages(
+      "x",
+      folders,
+      summary,
+      TRIAGE_SYSTEM_PROMPT,
+    );
+    expect(m[0]).toEqual({ role: "system", content: TRIAGE_SYSTEM_PROMPT });
+    const batch = buildBatchClassificationMessages(
+      "x",
+      folders,
+      [summary],
+      BATCH_TRIAGE_SYSTEM_PROMPT,
+    );
+    expect(batch[0].content).toBe(BATCH_TRIAGE_SYSTEM_PROMPT);
+  });
+});
+
+describe("renderSummary body handling", () => {
+  const headerOnly: MessageSummary = {
+    ...summary,
+    headers: {},
+    bodyExcerpt: "",
+  };
+
+  it("omits the body section for a header-only summary", () => {
+    const user = buildClassificationMessages("x", folders, headerOnly)[1].content;
+    expect(user).toContain("Subject: Sale!");
+    expect(user).not.toContain("Body excerpt:");
+    expect(user).not.toContain("(empty)");
+  });
+
+  it("includes the body section when an excerpt is present", () => {
+    const user = buildClassificationMessages("x", folders, summary)[1].content;
+    expect(user).toContain("Body excerpt:");
+    expect(user).toContain("Buy now");
   });
 });

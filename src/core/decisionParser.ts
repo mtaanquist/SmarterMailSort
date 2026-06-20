@@ -3,7 +3,7 @@
 // chosen folder against the allowed set so the model can never target a folder
 // that does not exist.
 
-import type { Decision } from "./types.js";
+import type { Decision, Triage } from "./types.js";
 
 const KEEP = (reason: string): Decision => ({
   action: "keep",
@@ -102,6 +102,65 @@ export function parseDecision(
   }
 
   return normaliseDecision(obj, allowedFolders);
+}
+
+/**
+ * Validate one parsed triage object: an explicit "unsure" becomes an escalate
+ * request; anything else is normalised to a final decision (move/keep).
+ */
+function normaliseTriage(
+  obj: Record<string, unknown>,
+  allowedFolders: ReadonlySet<string>,
+): Triage {
+  const action = String(obj.action ?? "").toLowerCase();
+  if (action === "unsure") return { kind: "escalate" };
+  return { kind: "decided", decision: normaliseDecision(obj, allowedFolders) };
+}
+
+/**
+ * Parse a raw triage reply. A reply that can't be parsed escalates (we'd rather
+ * fetch the body and look again than silently keep on a parse failure).
+ */
+export function parseTriageDecision(
+  raw: string,
+  allowedFolders: ReadonlySet<string>,
+): Triage {
+  const json = extractJsonObject(raw ?? "");
+  if (!json) return { kind: "escalate" };
+
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return { kind: "escalate" };
+  }
+
+  return normaliseTriage(obj, allowedFolders);
+}
+
+/**
+ * Parse a batched triage reply into outcomes keyed by message id. Any id the
+ * model omitted is simply absent from the map; callers default those to an
+ * escalate (so an unparseable or partial triage falls back to the full pass).
+ */
+export function parseTriageDecisions(
+  raw: string,
+  allowedFolders: ReadonlySet<string>,
+  ids: readonly number[],
+): Map<number, Triage> {
+  const out = new Map<number, Triage>();
+  const valid = new Set(ids);
+  const list = extractDecisionList(raw);
+  if (!list) return out;
+
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const idRaw = (entry as Record<string, unknown>).id;
+    const id = typeof idRaw === "number" ? idRaw : Number(idRaw);
+    if (!Number.isFinite(id) || !valid.has(id) || out.has(id)) continue;
+    out.set(id, normaliseTriage(entry, allowedFolders));
+  }
+  return out;
 }
 
 /** Pull a list of raw decision objects from a model reply, if one is present. */

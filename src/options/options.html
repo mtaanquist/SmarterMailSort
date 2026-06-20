@@ -108,6 +108,18 @@
         <fieldset>
           <legend>Classification</legend>
 
+          <label class="inline">
+            <input id="triageFirst" type="checkbox" checked />
+            Triage on subject first, fetch the body only when unsure
+          </label>
+          <p class="hint">
+            Classify from the subject and sender alone, and only download a
+            message's body when the model can't decide without it. Much faster on
+            large folders, and often more accurate — a body's incidental keywords
+            are a common cause of mis-sorting. Turn off to send every message with
+            its body in one pass.
+          </p>
+
           <label>
             Max body characters per email
             <input id="maxBodyChars" type="number" min="0" step="100" value="2000" />
