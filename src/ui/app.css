@@ -1,7 +1,66 @@
+/* SmarterMailSort — "triage console" theme.
+   A calm, instrument-like surface: cool-grey canvas, white panels, deep-slate
+   ink, a single teal accent, and a monospace "data" face for counts, labels,
+   and confidence. Tokens carry light + dark (Thunderbird themes vary); the
+   review list is the hero. Shared by the app tab and the settings page. */
+
 :root {
   color-scheme: light dark;
-  --gap: 1rem;
-  --border: color-mix(in srgb, currentColor 20%, transparent);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --surface-2: #eef2f6;
+  --ink: #14202b;
+  --muted: #5c6b7a;
+  --faint: #8595a4;
+  --line: #e2e8ee;
+
+  --accent: #0f7d88;
+  --accent-strong: #0b626b;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(15, 125, 136, 0.1);
+
+  --warn: #b45309;
+  --danger: #c0392b;
+  --danger-soft: rgba(192, 57, 43, 0.1);
+  --ok: #1a7f4b;
+  --ok-soft: rgba(26, 127, 75, 0.1);
+
+  --r-sm: 7px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(16, 32, 48, 0.06), 0 1px 1px rgba(16, 32, 48, 0.04);
+  --shadow-md: 0 8px 24px rgba(16, 32, 48, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c242e;
+    --ink: #e6edf3;
+    --muted: #93a1b0;
+    --faint: #6b7a8a;
+    --line: #283039;
+
+    --accent: #2bb7c2;
+    --accent-strong: #49c8d2;
+    --accent-ink: #04282d;
+    --accent-soft: rgba(43, 183, 194, 0.14);
+
+    --warn: #d9923f;
+    --danger: #e5736b;
+    --danger-soft: rgba(229, 115, 107, 0.14);
+    --ok: #57c98a;
+    --ok-soft: rgba(87, 201, 138, 0.14);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
 }
 
 * {
@@ -9,40 +68,137 @@
 }
 
 body {
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-sans);
   margin: 0;
-  line-height: 1.4;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 .container {
-  max-width: 880px;
+  max-width: 860px;
   margin: 0 auto;
-  padding: var(--gap);
+  padding: 1.25rem 1.25rem 3rem;
+}
+
+/* ---- Eyebrow / utility "data" type ---------------------------------------- */
+
+.eyebrow,
+legend {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- App header ----------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0 1.1rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  flex: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.brand-name {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.brand-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.header-link {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--r-sm);
+}
+
+.header-link:hover {
+  background: var(--accent-soft);
+}
+
+/* ---- Panels --------------------------------------------------------------- */
+
+.panel,
+fieldset {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 1.25rem;
+  margin: 0 0 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+fieldset {
+  min-width: 0;
+}
+
+legend {
+  padding: 0 0.5rem;
 }
 
 h1 {
-  font-size: 1.4rem;
+  font-size: 1.3rem;
 }
 
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: var(--gap);
-  margin-bottom: var(--gap);
+h2 {
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.85rem;
 }
+
+/* ---- Form controls -------------------------------------------------------- */
 
 label {
   display: block;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.85rem;
   font-weight: 600;
 }
 
 label.inline {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.4rem;
   font-weight: 400;
   margin: 0;
+  color: var(--ink);
 }
 
 input,
@@ -50,27 +206,123 @@ select,
 textarea {
   display: block;
   width: 100%;
-  margin-top: 0.25rem;
-  padding: 0.4rem;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.6rem;
   font: inherit;
   font-weight: 400;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--surface-2);
 }
 
 input[type="checkbox"] {
   display: inline-block;
   width: auto;
   margin: 0;
+  accent-color: var(--accent);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+/* ---- Buttons -------------------------------------------------------------- */
+
+button {
+  padding: 0.5rem 0.95rem;
+  font: inherit;
+  font-weight: 550;
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--muted);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Primary actions: the verbs that move the workflow forward. */
+#start,
+#apply,
+#resume,
+#save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+#start:hover:not(:disabled),
+#apply:hover:not(:disabled),
+#resume:hover:not(:disabled),
+#save:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.7rem;
   flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+/* ---- Preset row ----------------------------------------------------------- */
+
+.preset-row {
   margin-top: 0.5rem;
 }
 
-/* Preset controls share one row instead of each taking full width. */
 .preset-row select,
 .preset-row input {
   display: inline-block;
@@ -80,21 +332,119 @@ input[type="checkbox"] {
   min-width: 6rem;
 }
 
+/* ---- Progress ------------------------------------------------------------- */
+
+progress {
+  width: 100%;
+  height: 0.55rem;
+  margin: 0.1rem 0 0.6rem;
+  border: none;
+  border-radius: 99px;
+  background: var(--surface-2);
+  -webkit-appearance: none;
+  appearance: none;
+  overflow: hidden;
+}
+
+progress::-webkit-progress-bar {
+  background: var(--surface-2);
+  border-radius: 99px;
+}
+
+progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 99px;
+}
+
+progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: 99px;
+}
+
+#progress-text {
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  margin: 0.2rem 0 0.15rem;
+}
+
+#progress-stats {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+/* ---- Status / alerts ------------------------------------------------------ */
+
+.status {
+  margin: 0.3rem 0;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.3rem 0 0.85rem;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.err {
+  color: var(--danger);
+}
+
+/* The page-level error renders as an alert block, not a stray line. */
+#error.status.err:not([hidden]) {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-md);
+  padding: 0.6rem 0.8rem;
+}
+
+/* Recovery panels read as quiet, tinted call-outs. */
+#resume-panel {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+#undo-panel {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+
+/* ---- Review controls toolbar --------------------------------------------- */
+
 .review-controls {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1.1rem;
   flex-wrap: wrap;
-  margin: 0.25rem 0 0.75rem;
+  margin: 0.25rem 0 1rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
 }
 
 .review-controls input[type="range"] {
   display: inline-block;
   width: auto;
-  margin-top: 0;
+  margin: 0;
+}
+
+#selected-count,
+#confidence-value {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--muted);
 }
 
 /* Keyword bulk-select: text box + two buttons share the controls row. */
+.keyword-filter {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .keyword-filter input[type="text"] {
   display: inline-block;
   width: auto;
@@ -105,60 +455,63 @@ input[type="checkbox"] {
 
 .keyword-filter .hint {
   margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
 }
 
-/* The per-folder select-all checkbox sits inline in the group header. */
-.folder-group summary .folder-select {
-  margin-right: 0.4rem;
-}
+/* ---- Review list (the hero) ---------------------------------------------- */
 
-.folder-count {
-  color: var(--muted, #888);
-  font-weight: 400;
-}
-
-button {
-  padding: 0.45rem 0.9rem;
-  font: inherit;
-  cursor: pointer;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-progress {
-  width: 100%;
-  height: 1rem;
-}
-
-.hint {
-  font-size: 0.85rem;
-  opacity: 0.75;
-  margin: 0.25rem 0 0.75rem;
-}
-
-.status.ok {
-  color: green;
-}
-
-.status.err {
-  color: #c0392b;
+#review-summary {
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  color: var(--muted);
+  margin: 0 0 0.85rem;
 }
 
 .folder-group {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  margin-bottom: 0.7rem;
+  overflow: hidden;
+  background: var(--surface);
 }
 
 .folder-group > summary {
   cursor: pointer;
-  padding: 0.5rem;
+  padding: 0.6rem 0.75rem;
   font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-2);
+}
+
+.folder-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.folder-group > summary::before {
+  content: "▸";
+  color: var(--faint);
+  font-size: 0.8rem;
+  transition: transform 0.12s ease;
+}
+
+.folder-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.folder-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 0.08rem 0.5rem;
 }
 
 .folder-group table {
@@ -166,13 +519,95 @@ progress {
   border-collapse: collapse;
 }
 
+.folder-group tr {
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.folder-group tbody tr:hover {
+  background: var(--surface-2);
+}
+
+/* A deselected row fades back so the kept selection reads at a glance. */
+.folder-group tr:has(.move-checkbox:not(:checked)) {
+  opacity: 0.4;
+}
+
 .folder-group td {
-  padding: 0.35rem 0.5rem;
-  border-top: 1px solid var(--border);
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--line);
   vertical-align: top;
 }
 
+.cell-check {
+  width: 1.5rem;
+}
+
+.cell-conf {
+  width: 4.75rem;
+}
+
+.subject {
+  font-weight: 550;
+}
+
 .reason {
-  opacity: 0.75;
+  color: var(--muted);
   font-size: 0.85rem;
+  margin-top: 0.1rem;
+}
+
+/* ---- Confidence meter ----------------------------------------------------- */
+
+.confidence {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 0.15rem;
+}
+
+.conf-pct {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.conf-bar {
+  height: 4px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.conf-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+}
+
+.confidence.level-med .conf-fill {
+  background: var(--warn);
+}
+
+.confidence.level-low .conf-fill {
+  background: var(--danger);
+}
+
+/* ---- Settings page extras ------------------------------------------------- */
+
+.help {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.help > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }

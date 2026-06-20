@@ -37,6 +37,7 @@ const el = {
   progressPanel: document.getElementById("progress-panel") as HTMLElement,
   progress: document.getElementById("progress") as HTMLProgressElement,
   progressText: document.getElementById("progress-text") as HTMLElement,
+  progressStats: document.getElementById("progress-stats") as HTMLElement,
   progressNote: document.getElementById("progress-note") as HTMLElement,
   resumePanel: document.getElementById("resume-panel") as HTMLElement,
   resumeText: document.getElementById("resume-text") as HTMLElement,
@@ -68,6 +69,23 @@ let presets: Preset[] = [];
 let lastState: JobState | null = null;
 /** Min confidence below which a proposed move is auto-deselected (0 = none). */
 let confidenceThreshold = 0;
+/**
+ * Fixed point from which the classification rate (and thus the ETA) is measured.
+ * Set on the first progress tick of a run and reset when a new run starts.
+ */
+let progressAnchor: { time: number; processed: number } | null = null;
+
+/** Render a millisecond duration as a short, human "~3m 20s" style string. */
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 1) return "<1s";
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
 
 function send(request: UiRequest): Promise<UiResponse> {
   return messenger.runtime.sendMessage(request) as Promise<UiResponse>;
@@ -154,27 +172,73 @@ async function persistPresets(): Promise<boolean> {
 
 function renderProgress(state: JobState): void {
   const running = state.phase === "classifying";
-  el.progressPanel.hidden = !running && state.phase !== "applying";
-  el.start.disabled = running || state.phase === "applying";
+  const busy = running || state.phase === "applying";
+  el.progressPanel.hidden = !busy;
+  el.start.disabled = busy;
   el.abort.disabled = !running;
+  // Lock the setup controls while a run is in flight so the inputs that fed it
+  // can't be edited mid-classification.
+  setSetupDisabled(busy);
+
+  // Anchor the rate measurement to the first tick of each run; drop it when idle
+  // (or when a new run resets the count) so the next ETA starts fresh.
+  if (!running) progressAnchor = null;
 
   const p = state.progress;
-  if (p) {
+  if (running && p) {
+    el.progressStats.hidden = false;
     if (p.total) {
-      el.progress.removeAttribute("indeterminate");
       el.progress.max = p.total;
       el.progress.value = p.processed;
-      el.progressText.textContent = `${p.processed} / ${p.total} classified`;
+      el.progressText.textContent = `${p.processed.toLocaleString()} / ${p.total.toLocaleString()} classified`;
+      el.progressStats.textContent = formatEta(p.processed, p.total);
     } else {
-      el.progress.removeAttribute("value");
-      el.progressText.textContent = `${p.processed} classified…`;
+      el.progress.removeAttribute("value"); // indeterminate until a total lands
+      el.progressText.textContent = `${p.processed.toLocaleString()} classified…`;
+      el.progressStats.textContent = "Counting messages…";
     }
+  } else {
+    el.progressStats.hidden = true;
   }
+
   if (state.phase === "applying") {
+    el.progress.removeAttribute("value");
     el.progressText.textContent = "Applying moves…";
   }
   // Retry notices only make sense mid-classification; clear them otherwise.
   if (!running) setNote(null);
+}
+
+/** "12,340 left · ~2m 5s left" from the running rate, or "estimating…" early. */
+function formatEta(processed: number, total: number): string {
+  const now = performance.now();
+  if (!progressAnchor || processed < progressAnchor.processed) {
+    progressAnchor = { time: now, processed };
+  }
+  const remaining = Math.max(0, total - processed);
+  const done = processed - progressAnchor.processed;
+  const elapsed = now - progressAnchor.time;
+  // Hold off on an ETA until a few messages have landed, so the first estimate
+  // isn't wildly off from one fast (or slow) sample.
+  if (remaining === 0) return `${remaining.toLocaleString()} left`;
+  if (done < 3 || elapsed < 1500) {
+    return `${remaining.toLocaleString()} left · estimating…`;
+  }
+  const etaMs = (remaining * elapsed) / done;
+  return `${remaining.toLocaleString()} left · ~${formatDuration(etaMs)} left`;
+}
+
+/** Grey out the setup inputs (folder, instruction, presets) while a job runs. */
+function setSetupDisabled(disabled: boolean): void {
+  el.folder.disabled = disabled;
+  el.instruction.disabled = disabled;
+  el.presetSelect.disabled = disabled;
+  el.presetName.disabled = disabled;
+  el.savePreset.disabled = disabled;
+  el.restorePresets.disabled = disabled;
+  el.crossAccount.disabled = disabled;
+  // Delete stays gated on a selection, but is also locked while busy.
+  el.deletePreset.disabled = disabled || !el.presetSelect.value;
 }
 
 function renderReview(state: JobState): void {
@@ -255,7 +319,7 @@ function updateSelectionUi(): void {
       folderBox.indeterminate = sel > 0 && sel < boxes.length;
     }
     const count = group.querySelector<HTMLElement>(".folder-count");
-    if (count) count.textContent = `(${sel}/${boxes.length})`;
+    if (count) count.textContent = `${sel} / ${boxes.length}`;
   }
 
   el.apply.disabled = lastState?.phase !== "review" || checked === 0;
@@ -278,18 +342,20 @@ function renderFolderGroup(
   // A click inside <summary> would otherwise toggle the disclosure open/closed.
   folderBox.addEventListener("click", (e) => e.stopPropagation());
   const label = document.createElement("span");
-  label.textContent = `→ ${folder} `;
+  label.textContent = folder;
   const count = document.createElement("span");
   count.className = "folder-count";
-  count.textContent = `(${items.length}/${items.length})`;
+  count.textContent = `${items.length} / ${items.length}`;
   summary.append(folderBox, label, count);
   details.appendChild(summary);
 
   const table = document.createElement("table");
+  const tbody = document.createElement("tbody");
   for (const item of items) {
     const tr = document.createElement("tr");
 
     const checkCell = document.createElement("td");
+    checkCell.className = "cell-check";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = true;
@@ -300,19 +366,44 @@ function renderFolderGroup(
     checkbox.className = "move-checkbox";
     checkCell.appendChild(checkbox);
 
+    const confCell = document.createElement("td");
+    confCell.className = "cell-conf";
+    confCell.appendChild(renderConfidence(item.decision.confidence));
+
     const infoCell = document.createElement("td");
     const subject = document.createElement("div");
+    subject.className = "subject";
     subject.textContent = item.summary.subject || "(no subject)";
     const meta = document.createElement("div");
     meta.className = "reason";
-    meta.textContent = `${item.summary.author} — ${item.decision.reason} (${item.decision.confidence.toFixed(2)})`;
+    meta.textContent = `${item.summary.author} · ${item.decision.reason}`;
     infoCell.append(subject, meta);
 
-    tr.append(checkCell, infoCell);
-    table.appendChild(tr);
+    tr.append(checkCell, confCell, infoCell);
+    tbody.appendChild(tr);
   }
+  table.appendChild(tbody);
   details.appendChild(table);
   return details;
+}
+
+/** A small confidence meter: a mono percentage over a bar coloured by tier. */
+function renderConfidence(confidence: number): HTMLElement {
+  const pct = Math.round(confidence * 100);
+  const level = confidence >= 0.75 ? "high" : confidence >= 0.5 ? "med" : "low";
+  const wrap = document.createElement("div");
+  wrap.className = `confidence level-${level}`;
+  const value = document.createElement("span");
+  value.className = "conf-pct";
+  value.textContent = `${pct}%`;
+  const bar = document.createElement("div");
+  bar.className = "conf-bar";
+  const fill = document.createElement("div");
+  fill.className = "conf-fill";
+  fill.style.width = `${pct}%`;
+  bar.appendChild(fill);
+  wrap.append(value, bar);
+  return wrap;
 }
 
 function renderResume(state: JobState): void {

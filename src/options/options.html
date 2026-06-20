@@ -7,9 +7,16 @@
     <link rel="stylesheet" href="../ui/app.css" />
   </head>
   <body>
-    <main class="container">
-      <h1>SmarterMailSort settings</h1>
+    <div class="container">
+      <header class="app-header">
+        <img class="brand-mark" src="../icons/icon.svg" alt="" />
+        <div class="brand-text">
+          <span class="brand-name">SmarterMailSort</span>
+          <span class="brand-tag">settings</span>
+        </div>
+      </header>
 
+      <main>
       <form id="settings-form">
         <fieldset>
           <legend>LLM endpoint</legend>
@@ -145,7 +152,8 @@
           OpenAI need no extra configuration.
         </p>
       </details>
-    </main>
+      </main>
+    </div>
 
     <script type="module" src="options.js"></script>
   </body>

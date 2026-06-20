@@ -18,6 +18,7 @@ import { testConnection } from "../core/llmClient.js";
 import type { Decision, MessageSummary } from "../core/types.js";
 import { listFolderTree, toFolderIndex } from "../platform/folders.js";
 import {
+  countFolder,
   getSummary,
   iterateFolderHeaders,
   moveBackByHeaderId,
@@ -297,6 +298,7 @@ const runner = new JobRunner({
   listFolders: listFolderTree,
   toFolderIndex,
   summarise,
+  countMessages: countFolder,
   createClassifiers,
   moveMessages: moveBatched,
   resolveCurrentIds,
