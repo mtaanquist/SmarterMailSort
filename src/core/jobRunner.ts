@@ -86,8 +86,13 @@ export interface JobRunnerDeps {
     allowedPaths: Set<string>;
     byPath: Map<string, FolderNode>;
   };
-  /** Stream of model-ready summaries for a folder. */
+  /** Stream of model-ready summaries for a folder (each carrying its body). */
   summarise: (folderId: string, maxBodyChars: number) => AsyncIterable<MessageSummary>;
+  /**
+   * Stream of header-only summaries (no body fetched), used by the triage-first
+   * pass; ambiguous messages get their body fetched lazily during classification.
+   */
+  summariseHeaders: (folderId: string) => AsyncIterable<MessageSummary>;
   /** Count the messages in a folder up front, so progress can show a total/ETA. */
   countMessages: (folderId: string) => Promise<number>;
   /** Build the LLM-backed classify functions for this run. */
@@ -437,8 +442,15 @@ export class JobRunner {
         this.deps.emit({ type: "progress", progress: this.state.progress });
       }
 
+      // Triage-first runs stream header-only summaries (the classifiers fetch a
+      // body only for messages they can't decide from headers); otherwise every
+      // message is summarised with its body up front.
+      const source = settings.triageFirst
+        ? this.deps.summariseHeaders(sourceFolderId)
+        : this.deps.summarise(sourceFolderId, settings.maxBodyChars);
+
       const results = await runClassification({
-        source: this.deps.summarise(sourceFolderId, settings.maxBodyChars),
+        source,
         // Skip the LLM for messages already decided in a prior (resumed) pass.
         classify: (summary) => this.cachedOrClassify(summary, raw),
         classifyBatch: (summaries) => this.cachedOrClassifyBatch(summaries, raw),

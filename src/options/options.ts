@@ -33,6 +33,7 @@ function readForm(): Settings {
     maxTokens: Number($("maxTokens").value),
     timeoutMs: Number($("timeoutMs").value),
     responseFormat: $("responseFormat").value as ResponseFormat,
+    triageFirst: $("triageFirst").checked,
     maxBodyChars: Number($("maxBodyChars").value),
     concurrency: Number($("concurrency").value),
     batchSize: Number($("batchSize").value),
@@ -50,6 +51,7 @@ function writeForm(s: Settings): void {
   $("maxTokens").value = String(s.maxTokens);
   $("timeoutMs").value = String(s.timeoutMs);
   $("responseFormat").value = s.responseFormat;
+  $("triageFirst").checked = s.triageFirst;
   $("maxBodyChars").value = String(s.maxBodyChars);
   $("concurrency").value = String(s.concurrency);
   $("batchSize").value = String(s.batchSize);

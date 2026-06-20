@@ -2,24 +2,36 @@
 // button, folder menu, app tab) and the UI port plumbing, and delegates the job
 // lifecycle to a JobRunner built from the platform + LLM dependencies.
 
-import { parseDecision, parseDecisions } from "../core/decisionParser.js";
+import {
+  parseDecision,
+  parseDecisions,
+  parseTriageDecision,
+  parseTriageDecisions,
+} from "../core/decisionParser.js";
 import { chatCompletion, resolveMaxTokens, type RetryInfo } from "../core/llmClient.js";
+import { classifyWithEscalation } from "../core/escalation.js";
 import { log, logError, warn } from "../core/log.js";
 import { JobRunner } from "../core/jobRunner.js";
 import type { ClassifierContext, Classifiers } from "../core/jobRunner.js";
 import {
   BATCH_DECISION_SCHEMA,
+  BATCH_TRIAGE_DECISION_SCHEMA,
+  BATCH_TRIAGE_SYSTEM_PROMPT,
   DECISION_SCHEMA,
+  TRIAGE_DECISION_SCHEMA,
+  TRIAGE_SYSTEM_PROMPT,
   buildBatchClassificationMessages,
   buildClassificationMessages,
 } from "../core/promptBuilder.js";
 import { PORT_NAME, type BgEvent, type UiRequest, type UiResponse } from "../core/protocol.js";
 import { testConnection } from "../core/llmClient.js";
-import type { Decision, MessageSummary } from "../core/types.js";
+import type { Decision, MessageSummary, Triage } from "../core/types.js";
 import { listFolderTree, toFolderIndex } from "../platform/folders.js";
+import { buildHeaderSummary } from "../core/messageSummary.js";
 import {
   countFolder,
   getSummary,
+  hydrateBody,
   iterateFolderHeaders,
   moveBackByHeaderId,
   moveBatched,
@@ -215,13 +227,25 @@ function registerEntryPoints(): void {
   }
 }
 
-/** Stream every message in the folder as a model-ready summary. */
+/** Stream every message in the folder as a model-ready summary (body included). */
 async function* summarise(
   folderId: string,
   maxBodyChars: number,
 ): AsyncGenerator<MessageSummary> {
   for await (const header of iterateFolderHeaders(folderId)) {
     yield await getSummary(header, maxBodyChars);
+  }
+}
+
+/**
+ * Stream every message as a header-only summary (no body fetch). The triage-first
+ * pass classifies from these and hydrates the body only for ambiguous messages.
+ */
+async function* summariseHeaders(
+  folderId: string,
+): AsyncGenerator<MessageSummary> {
+  for await (const header of iterateFolderHeaders(folderId)) {
+    yield buildHeaderSummary(header);
   }
 }
 
@@ -249,7 +273,15 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
     },
   };
 
-  const classify = async (summary: MessageSummary): Promise<Decision> => {
+  const OMITTED: Decision = {
+    action: "keep",
+    folder: null,
+    reason: "model omitted a decision for this email",
+    confidence: 0,
+  };
+
+  // Full-body single classify (the pass-2 / non-triage path).
+  const classifyFull = async (summary: MessageSummary): Promise<Decision> => {
     const messages = buildClassificationMessages(instruction, targets, summary);
     const raw = await chatCompletion(settings, messages, fetch, {
       ...chatOptions,
@@ -259,9 +291,9 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
     return parseDecision(raw, allowedPaths);
   };
 
-  // Batched path: classify several emails per LLM request, then map the keyed
-  // results back to the input order (any omitted email defaults to "keep").
-  const classifyBatch = async (
+  // Full-body batched classify: classify several emails per LLM request, then map
+  // the keyed results back to input order (any omitted email defaults to "keep").
+  const classifyFullBatch = async (
     summaries: MessageSummary[],
   ): Promise<Decision[]> => {
     const messages = buildBatchClassificationMessages(
@@ -274,21 +306,70 @@ function createClassifiers(ctx: ClassifierContext): Classifiers {
       jsonSchema: BATCH_DECISION_SCHEMA,
       maxTokens: resolveMaxTokens(settings.maxTokens, summaries.length),
     });
-    const byId = parseDecisions(
-      raw,
-      allowedPaths,
-      summaries.map((s) => s.id),
-    );
-    return summaries.map(
-      (s) =>
-        byId.get(s.id) ?? {
-          action: "keep",
-          folder: null,
-          reason: "model omitted a decision for this email",
-          confidence: 0,
-        },
-    );
+    const byId = parseDecisions(raw, allowedPaths, summaries.map((s) => s.id));
+    return summaries.map((s) => byId.get(s.id) ?? OMITTED);
   };
+
+  // Without triage, classification is a single full-body pass.
+  if (!settings.triageFirst) {
+    return { classify: classifyFull, classifyBatch: classifyFullBatch };
+  }
+
+  // Triage pass: decide from header-only summaries, flagging the ambiguous ones
+  // "unsure" so they can be escalated (body fetched) and re-classified in full.
+  const triageBatch = async (
+    summaries: MessageSummary[],
+  ): Promise<Triage[]> => {
+    const messages = buildBatchClassificationMessages(
+      instruction,
+      targets,
+      summaries,
+      BATCH_TRIAGE_SYSTEM_PROMPT,
+    );
+    const raw = await chatCompletion(settings, messages, fetch, {
+      ...chatOptions,
+      jsonSchema: BATCH_TRIAGE_DECISION_SCHEMA,
+      maxTokens: resolveMaxTokens(settings.maxTokens, summaries.length),
+    });
+    const byId = parseTriageDecisions(raw, allowedPaths, summaries.map((s) => s.id));
+    // An omitted (or unparseable) entry escalates, so we fall back to a full read
+    // rather than silently keeping it.
+    return summaries.map((s) => byId.get(s.id) ?? { kind: "escalate" });
+  };
+
+  // Single-message triage uses the same per-email prompt the non-batch full pass
+  // does, so a batch size of 1 keeps the original one-email framing.
+  const triageOne = async (summary: MessageSummary): Promise<Triage> => {
+    const messages = buildClassificationMessages(
+      instruction,
+      targets,
+      summary,
+      TRIAGE_SYSTEM_PROMPT,
+    );
+    const raw = await chatCompletion(settings, messages, fetch, {
+      ...chatOptions,
+      jsonSchema: TRIAGE_DECISION_SCHEMA,
+      maxTokens: resolveMaxTokens(settings.maxTokens, 1),
+    });
+    return parseTriageDecision(raw, allowedPaths);
+  };
+
+  const hydrate = (summary: MessageSummary): Promise<MessageSummary> =>
+    hydrateBody(summary, settings.maxBodyChars);
+
+  const classify = (summary: MessageSummary): Promise<Decision> =>
+    classifyWithEscalation([summary], {
+      triage: (ss) => triageOne(ss[0]).then((t) => [t]),
+      hydrate,
+      classifyFull: (ss) => Promise.all(ss.map(classifyFull)),
+    }).then((d) => d[0]);
+
+  const classifyBatch = (summaries: MessageSummary[]): Promise<Decision[]> =>
+    classifyWithEscalation(summaries, {
+      triage: triageBatch,
+      hydrate,
+      classifyFull: classifyFullBatch,
+    });
 
   return { classify, classifyBatch };
 }
@@ -298,6 +379,7 @@ const runner = new JobRunner({
   listFolders: listFolderTree,
   toFolderIndex,
   summarise,
+  summariseHeaders,
   countMessages: countFolder,
   createClassifiers,
   moveMessages: moveBatched,

@@ -2,7 +2,12 @@
 // folder, building summaries via getFull, and batched moves. Kept minimal so
 // the testable logic lives in core/.
 
-import { buildSummary, type RawHeader, type RawPart } from "../core/messageSummary.js";
+import {
+  buildSummary,
+  hydrateSummary,
+  type RawHeader,
+  type RawPart,
+} from "../core/messageSummary.js";
 import type {
   MessageSummary,
   UndoOutcome,
@@ -51,6 +56,21 @@ export async function getSummary(
     header.id,
   )) as unknown as RawPart;
   return buildSummary(header, full, maxBodyChars);
+}
+
+/**
+ * Fetch the body for a header-only summary and fill in its body excerpt and
+ * interesting headers. Used by the triage-first pass to "escalate" only the
+ * messages the model couldn't decide from headers alone.
+ */
+export async function hydrateBody(
+  summary: MessageSummary,
+  maxBodyChars: number,
+): Promise<MessageSummary> {
+  const full = (await messenger.messages.getFull(
+    summary.id,
+  )) as unknown as RawPart;
+  return hydrateSummary(summary, full, maxBodyChars);
 }
 
 /**

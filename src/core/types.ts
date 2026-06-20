@@ -43,6 +43,16 @@ export interface LlmConfig {
 export interface Settings extends LlmConfig {
   /** Max number of body characters fed to the model per message. */
   maxBodyChars: number;
+  /**
+   * When true, classify from the subject + sender alone first (a "triage" pass
+   * that never fetches the message body), and only fetch the full body for the
+   * messages the model flags as too ambiguous to decide from headers. This skips
+   * the per-message body fetch for the bulk of a folder — a large speed-up — and
+   * tends to be MORE accurate, since the body's incidental keywords are a common
+   * source of misclassification. When false, every message is sent with its body
+   * in a single pass (the original behaviour).
+   */
+  triageFirst: boolean;
   /** How many messages to classify in parallel. 1 == strictly serial. */
   concurrency: number;
   /**
@@ -70,6 +80,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timeoutMs: 60000,
   responseFormat: "auto",
   maxBodyChars: 2000,
+  triageFirst: true,
   concurrency: 1,
   batchSize: 1,
   maxRetries: 3,
@@ -128,6 +139,15 @@ export interface Decision {
   /** 0..1 model-reported confidence; defaults to 0 when absent. */
   confidence: number;
 }
+
+/**
+ * Outcome of the first-pass triage over a header-only summary: either a final
+ * decision the model could make from the subject/sender alone, or a request to
+ * "escalate" — fetch the full body and decide again with more context.
+ */
+export type Triage =
+  | { kind: "decided"; decision: Decision }
+  | { kind: "escalate" };
 
 /** A decision tied back to the message it concerns. */
 export interface ClassifiedMessage {

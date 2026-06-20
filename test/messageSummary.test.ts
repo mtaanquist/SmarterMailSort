@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSummary, type RawHeader, type RawPart } from "../src/core/messageSummary.js";
+import {
+  buildHeaderSummary,
+  buildSummary,
+  hydrateSummary,
+  type RawHeader,
+  type RawPart,
+} from "../src/core/messageSummary.js";
 
 const header: RawHeader = {
   id: 7,
@@ -57,5 +63,41 @@ describe("buildSummary", () => {
     expect(summary.bodyExcerpt).toBe("");
     expect(summary.author).toBe("");
     expect(summary.recipients).toEqual([]);
+  });
+});
+
+describe("buildHeaderSummary", () => {
+  it("carries the header fields but no body or extra headers", () => {
+    const summary = buildHeaderSummary(header);
+    expect(summary.id).toBe(7);
+    expect(summary.subject).toBe("Weekly digest");
+    expect(summary.headerMessageId).toBe("<digest-42@example.com>");
+    expect(summary.date).toBe("2026-01-02T03:04:05.000Z");
+    expect(summary.bodyExcerpt).toBe("");
+    expect(summary.headers).toEqual({});
+  });
+
+  it("defaults missing fields like buildSummary does", () => {
+    const summary = buildHeaderSummary({ id: 3 });
+    expect(summary.author).toBe("");
+    expect(summary.recipients).toEqual([]);
+    expect(summary.bodyExcerpt).toBe("");
+  });
+});
+
+describe("hydrateSummary", () => {
+  it("adds the body excerpt and interesting headers to a header-only summary", () => {
+    const headerOnly = buildHeaderSummary(header);
+    const full: RawPart = {
+      contentType: "multipart/mixed",
+      headers: { "list-id": ["<promo.example.com>"] },
+      parts: [{ contentType: "text/plain", body: "the full body text" }],
+    };
+    const hydrated = hydrateSummary(headerOnly, full, 8);
+    expect(hydrated.bodyExcerpt).toBe("the full");
+    expect(hydrated.headers["list-id"]).toBe("<promo.example.com>");
+    // Original header fields are preserved.
+    expect(hydrated.subject).toBe("Weekly digest");
+    expect(hydrated.id).toBe(7);
   });
 });

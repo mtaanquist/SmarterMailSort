@@ -4,6 +4,8 @@ import {
   extractJsonObject,
   parseDecision,
   parseDecisions,
+  parseTriageDecision,
+  parseTriageDecisions,
 } from "../src/core/decisionParser.js";
 
 const allowed = new Set(["Local Folders/to_be_deleted", "Local Folders/archive"]);
@@ -120,5 +122,70 @@ describe("parseDecisions", () => {
   it("returns an empty map on unparseable input", () => {
     expect(parseDecisions("garbage", allowed, ids).size).toBe(0);
     expect(parseDecisions("", allowed, ids).size).toBe(0);
+  });
+});
+
+describe("parseTriageDecision", () => {
+  it("escalates on an explicit unsure action", () => {
+    const raw = '{"action":"unsure","folder":null,"reason":"need body","confidence":0.2}';
+    expect(parseTriageDecision(raw, allowed)).toEqual({ kind: "escalate" });
+  });
+
+  it("returns a decided move when the model commits", () => {
+    const raw = '{"action":"move","folder":"Local Folders/archive","reason":"old","confidence":0.9}';
+    expect(parseTriageDecision(raw, allowed)).toEqual({
+      kind: "decided",
+      decision: {
+        action: "move",
+        folder: "Local Folders/archive",
+        reason: "old",
+        confidence: 0.9,
+      },
+    });
+  });
+
+  it("returns a decided keep for a keep action", () => {
+    const raw = '{"action":"keep","folder":null,"reason":"personal","confidence":0.8}';
+    const t = parseTriageDecision(raw, allowed);
+    expect(t).toEqual({
+      kind: "decided",
+      decision: { action: "keep", folder: null, reason: "personal", confidence: 0.8 },
+    });
+  });
+
+  it("escalates rather than keeping when the reply can't be parsed", () => {
+    expect(parseTriageDecision("not json", allowed)).toEqual({ kind: "escalate" });
+    expect(parseTriageDecision("", allowed)).toEqual({ kind: "escalate" });
+  });
+});
+
+describe("parseTriageDecisions", () => {
+  const ids = [1, 2, 3];
+
+  it("maps unsure to escalate and decisions to decided, keyed by id", () => {
+    const raw = JSON.stringify({
+      results: [
+        { id: 1, action: "move", folder: "Local Folders/archive", reason: "x", confidence: 1 },
+        { id: 2, action: "unsure", folder: null, reason: "?", confidence: 0 },
+        { id: 3, action: "keep", folder: null, reason: "y", confidence: 0.5 },
+      ],
+    });
+    const out = parseTriageDecisions(raw, allowed, ids);
+    expect(out.get(1)).toEqual({
+      kind: "decided",
+      decision: { action: "move", folder: "Local Folders/archive", reason: "x", confidence: 1 },
+    });
+    expect(out.get(2)).toEqual({ kind: "escalate" });
+    expect(out.get(3)?.kind).toBe("decided");
+  });
+
+  it("omits ids the model never returned (callers default them to escalate)", () => {
+    const raw = JSON.stringify({
+      results: [{ id: 1, action: "keep", folder: null, reason: "x", confidence: 0 }],
+    });
+    const out = parseTriageDecisions(raw, allowed, ids);
+    expect(out.has(1)).toBe(true);
+    expect(out.has(2)).toBe(false);
+    expect(out.has(3)).toBe(false);
   });
 });

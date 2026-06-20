@@ -30,6 +30,7 @@ const SETTINGS: Settings = {
   maxTokens: 0,
   timeoutMs: 1000,
   responseFormat: "auto",
+  triageFirst: false,
   maxBodyChars: 100,
   concurrency: 1,
   batchSize: 1,
@@ -126,6 +127,9 @@ function makeRunner(
     summarise: async function* () {
       for (const id of ids) yield summary(id);
     },
+    summariseHeaders: async function* () {
+      for (const id of ids) yield summary(id);
+    },
     countMessages: async () => ids.length,
     createClassifiers: (ctx): Classifiers => {
       harness.capturedCtx = ctx;
@@ -196,6 +200,43 @@ describe("JobRunner.start", () => {
     const second = h.runner.start("src", "second");
     expect(second).toEqual({ ok: false, error: "a job is already running" });
     await waitFor(() => h.runner.getState().phase === "review");
+  });
+
+  it("streams full summaries when triageFirst is off", async () => {
+    const fullSource = vi.fn(async function* () {
+      for (const id of [1, 2, 3]) yield summary(id);
+    });
+    const headerSource = vi.fn(async function* () {
+      /* should not be called */
+    });
+    const h = makeRunner({
+      loadSettings: async () => ({ ...SETTINGS, triageFirst: false }),
+      summarise: fullSource,
+      summariseHeaders: headerSource,
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(fullSource).toHaveBeenCalledTimes(1);
+    expect(headerSource).not.toHaveBeenCalled();
+  });
+
+  it("streams header-only summaries when triageFirst is on", async () => {
+    const fullSource = vi.fn(async function* () {
+      /* should not be called */
+    });
+    const headerSource = vi.fn(async function* () {
+      for (const id of [1, 2, 3]) yield summary(id);
+    });
+    const h = makeRunner({
+      loadSettings: async () => ({ ...SETTINGS, triageFirst: true }),
+      summarise: fullSource,
+      summariseHeaders: headerSource,
+    });
+    h.runner.start("src", "x");
+    await waitFor(() => h.runner.getState().phase === "review");
+    expect(headerSource).toHaveBeenCalledWith("src");
+    expect(fullSource).not.toHaveBeenCalled();
+    expect(h.runner.getState().results.map((r) => r.summary.id)).toEqual([1, 2, 3]);
   });
 
   it("excludes the source folder from targets and allowed paths", async () => {
