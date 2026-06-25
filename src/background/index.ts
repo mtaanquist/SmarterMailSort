@@ -29,6 +29,7 @@ import type { Decision, MessageSummary, Triage } from "../core/types.js";
 import { listFolderTree, toFolderIndex } from "../platform/folders.js";
 import { buildHeaderSummary } from "../core/messageSummary.js";
 import {
+  copyBatched,
   countFolder,
   getSummary,
   hydrateBody,
@@ -383,6 +384,7 @@ const runner = new JobRunner({
   countMessages: countFolder,
   createClassifiers,
   moveMessages: moveBatched,
+  copyMessages: copyBatched,
   resolveCurrentIds,
   undoMoves: moveBackByHeaderId,
   loadUndo,
@@ -464,7 +466,7 @@ messenger.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         runner.abort();
         return { ok: true };
       case "applyMoves":
-        return runner.apply(request.messageIds);
+        return runner.apply(request.messageIds, request.keepOriginalCrossAccount);
       case "undo":
         return runner.undo();
       case "resume":

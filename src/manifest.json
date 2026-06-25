@@ -17,6 +17,7 @@
     "accountsRead",
     "messagesRead",
     "messagesMove",
+    "messagesDelete",
     "menus",
     "storage",
     "alarms"

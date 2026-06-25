@@ -12,6 +12,8 @@ export interface MockMessenger {
     query: ReturnType<typeof vi.fn>;
     getFull: ReturnType<typeof vi.fn>;
     move: ReturnType<typeof vi.fn>;
+    copy: ReturnType<typeof vi.fn>;
+    delete: ReturnType<typeof vi.fn>;
   };
   storage: {
     local: {
@@ -32,6 +34,8 @@ export function installMockMessenger(): MockMessenger {
       query: vi.fn(),
       getFull: vi.fn(),
       move: vi.fn().mockResolvedValue(undefined),
+      copy: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
     },
     storage: {
       local: {

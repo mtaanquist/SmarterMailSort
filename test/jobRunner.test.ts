@@ -82,6 +82,7 @@ interface Harness {
   /** Message ids actually sent to the (LLM) classifier, to prove cache skips. */
   classifyCalls: number[];
   moveMessages: ReturnType<typeof vi.fn>;
+  copyMessages: ReturnType<typeof vi.fn>;
   resolveCurrentIds: ReturnType<typeof vi.fn>;
   undoMoves: ReturnType<typeof vi.fn>;
   saveUndo: ReturnType<typeof vi.fn>;
@@ -106,6 +107,7 @@ function makeRunner(
     capturedCtx: null,
     classifyCalls: [],
     moveMessages: vi.fn(async (): Promise<MoveOutcome[]> => []),
+    copyMessages: vi.fn(async (): Promise<MoveOutcome[]> => []),
     resolveCurrentIds: vi.fn(async () => new Map<string, number>()),
     undoMoves: vi.fn(
       async (): Promise<UndoOutcome> => ({ restored: 0, failures: [] }),
@@ -145,6 +147,7 @@ function makeRunner(
       };
     },
     moveMessages: harness.moveMessages,
+    copyMessages: harness.copyMessages,
     resolveCurrentIds: harness.resolveCurrentIds,
     undoMoves: harness.undoMoves,
     loadUndo: async () => null,
@@ -426,13 +429,13 @@ describe("JobRunner.apply", () => {
     h.runner.apply([1, 3]);
     await waitFor(() => h.runner.getState().phase === "done");
 
-    expect(h.runner.getState().undo).toEqual({ count: 2 });
+    expect(h.runner.getState().undo).toEqual({ count: 2, copied: 0 });
     expect(h.saveUndo).toHaveBeenCalledTimes(1);
     const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
     expect(record.sourceFolderId).toBe("src");
     expect(record.items).toEqual([
-      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA" },
-      { headerMessageId: "<msg-3@example.com>", destFolderId: "fB" },
+      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA", kind: "move" },
+      { headerMessageId: "<msg-3@example.com>", destFolderId: "fB", kind: "move" },
     ]);
   });
 
@@ -447,7 +450,7 @@ describe("JobRunner.apply", () => {
     await waitFor(() => h.runner.getState().phase === "done");
     const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
     expect(record.items).toEqual([
-      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA" },
+      { headerMessageId: "<msg-1@example.com>", destFolderId: "fA", kind: "move" },
     ]);
   });
 
@@ -458,6 +461,59 @@ describe("JobRunner.apply", () => {
     expect(h.runner.getState().undo).toBeNull();
     expect(h.clearUndo).toHaveBeenCalled();
     expect(h.saveUndo).not.toHaveBeenCalled();
+  });
+
+  // A folder set with a destination in a DIFFERENT account ("xArc"), plus a
+  // classifier that decides id 1 -> that cross-account folder and id 3 -> same.
+  const crossAccount = (): Partial<JobRunnerDeps> => ({
+    listFolders: async () => [
+      ...FOLDERS,
+      { id: "xArc", path: "Other/Archive", depth: 1, accountName: "Other" },
+    ],
+    createClassifiers: (): Classifiers => {
+      const decide = (s: MessageSummary): Decision =>
+        s.id === 1 ? move("Other/Archive") : s.id === 3 ? move("Acc/Finance") : keep;
+      return {
+        classify: async (s) => decide(s),
+        classifyBatch: async (ss) => ss.map(decide),
+      };
+    },
+  });
+
+  it("copies cross-account destinations and moves same-account ones by default", async () => {
+    const h = await toReview(crossAccount());
+    h.runner.apply([1, 3]); // keepOriginalCrossAccount defaults to true
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    // Same-account (id 3 -> fB) moved; cross-account (id 1 -> xArc) copied.
+    const moved = h.moveMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(moved.get("fB")).toEqual([3]);
+    expect(moved.has("xArc")).toBe(false);
+    const copied = h.copyMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(copied.get("xArc")).toEqual([1]);
+    expect(copied.has("fB")).toBe(false);
+
+    // Undo record tags each item with how it was applied; state reports copies.
+    expect(h.runner.getState().undo).toEqual({ count: 2, copied: 1 });
+    const record = h.saveUndo.mock.calls[0][0] as UndoRecord;
+    expect(record.items).toEqual([
+      { headerMessageId: "<msg-1@example.com>", destFolderId: "xArc", kind: "copy" },
+      { headerMessageId: "<msg-3@example.com>", destFolderId: "fB", kind: "move" },
+    ]);
+  });
+
+  it("moves cross-account destinations when keep-original is off", async () => {
+    const h = await toReview(crossAccount());
+    h.runner.apply([1, 3], false);
+    await waitFor(() => h.runner.getState().phase === "done");
+
+    const moved = h.moveMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(moved.get("xArc")).toEqual([1]);
+    expect(moved.get("fB")).toEqual([3]);
+    // Nothing copied; copyMessages is called with an empty group.
+    const copied = h.copyMessages.mock.calls[0][0] as Map<string, number[]>;
+    expect(copied.size).toBe(0);
+    expect(h.runner.getState().undo).toEqual({ count: 2, copied: 0 });
   });
 });
 
@@ -510,7 +566,8 @@ describe("JobRunner.undo", () => {
     };
     const h = makeRunner({ loadUndo: async () => record });
     await h.runner.init();
-    expect(h.runner.getState().undo).toEqual({ count: 1 });
+    // A legacy record (items without `kind`) reports zero copies.
+    expect(h.runner.getState().undo).toEqual({ count: 1, copied: 0 });
     // And it can be reversed after a restart, with no prior in-session apply.
     h.runner.undo();
     await waitFor(() => h.runner.getState().phase === "idle");

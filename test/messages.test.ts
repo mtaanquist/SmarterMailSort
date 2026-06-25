@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  copyBatched,
   iterateFolderHeaders,
   moveBackByHeaderId,
   moveBatched,
@@ -112,6 +113,33 @@ describe("moveBatched", () => {
   });
 });
 
+describe("copyBatched", () => {
+  it("copies each group via messages.copy and reports counts", async () => {
+    const results = await copyBatched(
+      new Map([
+        ["folderA", [1, 2]],
+        ["folderB", [3]],
+      ]),
+    );
+    expect(mock.messages.copy).toHaveBeenCalledWith([1, 2], "folderA");
+    expect(mock.messages.copy).toHaveBeenCalledWith([3], "folderB");
+    expect(mock.messages.move).not.toHaveBeenCalled();
+    expect(results).toEqual([
+      { folderId: "folderA", moved: 2 },
+      { folderId: "folderB", moved: 1 },
+    ]);
+  });
+
+  it("chunks and retries like moveBatched", async () => {
+    const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+    const results = await copyBatched(new Map([["folderA", ids]]), {
+      chunkSize: 100,
+    });
+    expect(results).toEqual([{ folderId: "folderA", moved: 250 }]);
+    expect(mock.messages.copy).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("resolveCurrentIds", () => {
   it("maps requested Message-IDs to current numeric ids by scanning the folder", async () => {
     mock.messages.list.mockResolvedValue({
@@ -197,5 +225,42 @@ describe("moveBackByHeaderId", () => {
     );
     expect(outcome.restored).toBe(0);
     expect(outcome.failures[0].error).toBe("locked");
+  });
+
+  it("deletes the copy (not move back) for copy-kind undo items", async () => {
+    const found: Record<string, number> = { "<m1>": 11, "<c1>": 21 };
+    mock.messages.query.mockImplementation(async (q: { headerMessageId: string }) => ({
+      id: null,
+      messages: [{ id: found[q.headerMessageId] }],
+    }));
+
+    const outcome = await moveBackByHeaderId({
+      sourceFolderId: "src",
+      items: [
+        { headerMessageId: "<m1>", destFolderId: "fA", kind: "move" },
+        { headerMessageId: "<c1>", destFolderId: "xA", kind: "copy" },
+      ],
+    });
+
+    expect(outcome).toEqual({ restored: 2, failures: [] });
+    // The moved message goes back to the source...
+    expect(mock.messages.move).toHaveBeenCalledWith([11], "src");
+    // ...while the cross-account copy is deleted from its destination.
+    expect(mock.messages.delete).toHaveBeenCalledWith([21]);
+    expect(mock.messages.move).not.toHaveBeenCalledWith([21], "src");
+  });
+
+  it("reports a failure when deleting a copy throws", async () => {
+    mock.messages.query.mockResolvedValue({ id: null, messages: [{ id: 21 }] });
+    mock.messages.delete.mockRejectedValue(new Error("no perms"));
+    const outcome = await moveBackByHeaderId(
+      {
+        sourceFolderId: "src",
+        items: [{ headerMessageId: "<c1>", destFolderId: "xA", kind: "copy" }],
+      },
+      { retryDelayMs: 0 },
+    );
+    expect(outcome.restored).toBe(0);
+    expect(outcome.failures[0]).toMatchObject({ headerMessageId: "<c1>", error: "no perms" });
   });
 });

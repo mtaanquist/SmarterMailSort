@@ -164,11 +164,17 @@ export interface ClassifyProgress {
   lastResult?: ClassifiedMessage;
 }
 
-/** One moved message, identified by its move-stable RFC Message-ID. */
+/** One applied message, identified by its move-stable RFC Message-ID. */
 export interface UndoItem {
   headerMessageId: string;
-  /** Folder the message was moved INTO (where undo must look for it now). */
+  /** Folder the message was moved/copied INTO (where undo must look for it now). */
   destFolderId: string;
+  /**
+   * How it was applied, so undo knows how to reverse it: `move` (default) moves
+   * it back to the source; `copy` (cross-account keep-original) deletes the copy
+   * left in the destination. Optional/absent means `move` for older records.
+   */
+  kind?: "move" | "copy";
 }
 
 /** The record needed to reverse the last applied batch of moves. */

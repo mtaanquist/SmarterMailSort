@@ -61,6 +61,7 @@ const el = {
   apply: document.getElementById("apply") as HTMLButtonElement,
   download: document.getElementById("download") as HTMLButtonElement,
   dryRun: document.getElementById("dry-run") as HTMLInputElement,
+  keepOriginal: document.getElementById("keep-original") as HTMLInputElement,
   error: document.getElementById("error") as HTMLElement,
 };
 
@@ -423,7 +424,10 @@ function renderUndo(state: JobState): void {
   const busy = state.phase === "classifying" || state.phase === "applying";
   el.undoPanel.hidden = !state.undo;
   if (state.undo) {
-    el.undoText.textContent = `Last apply moved ${state.undo.count} message(s). You can move them back.`;
+    const { count, copied } = state.undo;
+    el.undoText.textContent = copied
+      ? `Last apply changed ${count} message(s), ${copied} kept as cross-account copies. Undo moves the rest back and deletes those copies.`
+      : `Last apply moved ${count} message(s). You can move them back.`;
   }
   el.undo.disabled = busy;
 }
@@ -584,7 +588,11 @@ function wireEvents(): void {
       return;
     }
     ensurePort(); // receive the applying/done state transitions
-    const res = await send({ type: "applyMoves", messageIds: ids });
+    const res = await send({
+      type: "applyMoves",
+      messageIds: ids,
+      keepOriginalCrossAccount: el.keepOriginal.checked,
+    });
     if (!res.ok && "error" in res) setError(res.error);
   });
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Keep originals on cross-account moves (on by default).** When a proposed
+  move targets a folder in a *different* account than the source, Thunderbird
+  has to copy-then-delete (there is no atomic cross-account move), and an
+  interrupted run can leave the source copy behind. A new **Keep originals for
+  cross-account moves** toggle on the review screen — checked by default for
+  safety — makes those cross-account transfers an explicit copy that leaves the
+  original untouched; same-account destinations always move as before. Undo
+  understands the difference: it moves real moves back and deletes the
+  cross-account copies, restoring the exact pre-apply state. (Adds the
+  `messagesDelete` permission, needed to remove the copies on undo.)
+
 ### Fixed
 - **Large applies no longer abort after the first message.** Applying a big
   batch of moves (thousands of messages to one folder) issued a single

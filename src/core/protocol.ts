@@ -23,7 +23,16 @@ export type UiRequest =
     }
   | { type: "abort" }
   | { type: "getState" }
-  | { type: "applyMoves"; messageIds: number[] }
+  | {
+      type: "applyMoves";
+      messageIds: number[];
+      /**
+       * When a selected destination is in a different account than the source,
+       * copy into it and leave the original in place instead of moving. Defaults
+       * to true (the safe choice); same-account destinations always move.
+       */
+      keepOriginalCrossAccount?: boolean;
+    }
   | { type: "undo" }
   | { type: "resume" }
   | { type: "discardResume" }
@@ -35,8 +44,10 @@ export type JobPhase = "idle" | "classifying" | "review" | "applying" | "done";
 
 /** Lightweight, UI-facing view of the available "undo last apply". */
 export interface UndoSummary {
-  /** Number of messages that can be moved back. */
+  /** Total messages the last apply changed (moves + cross-account copies). */
   count: number;
+  /** How many of those were cross-account copies (undo deletes these copies). */
+  copied: number;
 }
 
 /** UI-facing view of an interrupted run that can be resumed. */

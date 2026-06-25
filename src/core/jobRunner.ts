@@ -100,6 +100,11 @@ export interface JobRunnerDeps {
   /** Apply moves grouped by destination folder id. */
   moveMessages: (byFolderId: Map<string, number[]>) => Promise<MoveOutcome[]>;
   /**
+   * Copy messages grouped by destination folder id, leaving the originals in
+   * place. Used for cross-account "keep original" applies.
+   */
+  copyMessages: (byFolderId: Map<string, number[]>) => Promise<MoveOutcome[]>;
+  /**
    * Re-resolve the current numeric ids of messages (by their move-stable RFC
    * Message-ID) within a folder. Used to recover a review restored from a
    * snapshot after a restart, where the stored numeric ids may be stale.
@@ -321,7 +326,7 @@ export class JobRunner {
   }
 
   /** Apply the selected move decisions. Rejected unless we're in review. */
-  apply(messageIds: number[]): JobActionResult {
+  apply(messageIds: number[], keepOriginalCrossAccount = true): JobActionResult {
     if (this.state.phase !== "review") {
       return { ok: false, error: "no results to apply" };
     }
@@ -329,7 +334,7 @@ export class JobRunner {
     this.state.error = null;
     this.emitState();
 
-    void this.runApply(messageIds);
+    void this.runApply(messageIds, keepOriginalCrossAccount);
     return { ok: true };
   }
 
@@ -357,7 +362,12 @@ export class JobRunner {
   /** Update both the in-memory undo record and the UI-facing summary. */
   private setUndo(record: UndoRecord | null): void {
     this.undoRecord = record;
-    this.state.undo = record ? { count: record.items.length } : null;
+    this.state.undo = record
+      ? {
+          count: record.items.length,
+          copied: record.items.filter((i) => i.kind === "copy").length,
+        }
+      : null;
   }
 
   private setResumable(summary: ResumableSummary | null): void {
@@ -559,11 +569,19 @@ export class JobRunner {
         : null;
   }
 
-  private async runApply(messageIds: number[]): Promise<void> {
+  private async runApply(
+    messageIds: number[],
+    keepOriginalCrossAccount: boolean,
+  ): Promise<void> {
     try {
       const nodes = await this.deps.listFolders();
       const { byPath } = this.deps.toFolderIndex(nodes);
       const selected = new Set(messageIds);
+      // The source folder's account; a destination in any other account is a
+      // cross-account transfer, which we copy (keeping the original) when asked.
+      const sourceAccount = nodes.find(
+        (n) => n.id === this.state.sourceFolderId,
+      )?.accountName;
 
       // The selected move decisions whose destination folder still exists.
       const moves = this.state.results.filter(
@@ -581,9 +599,12 @@ export class JobRunner {
       // session keep their ids and skip the lookup entirely.
       const currentId = await this.resolveApplyIds(moves);
 
-      // Group the moves by destination folder id, and in parallel capture
-      // move-stable header ids per destination for a later undo.
-      const byFolderId = new Map<string, number[]>();
+      // Group by destination folder id, splitting cross-account destinations we
+      // were asked to keep originals for into a separate "copy" set. In parallel
+      // capture move-stable header ids (tagged with how they were applied) per
+      // destination for a later undo.
+      const moveByFolderId = new Map<string, number[]>();
+      const copyByFolderId = new Map<string, number[]>();
       const undoByFolderId = new Map<string, UndoItem[]>();
       let skipped = 0;
       for (const item of moves) {
@@ -593,21 +614,31 @@ export class JobRunner {
           skipped++;
           continue;
         }
-        const list = byFolderId.get(node.id) ?? [];
+        const crossAccount =
+          sourceAccount !== undefined && node.accountName !== sourceAccount;
+        const asCopy = keepOriginalCrossAccount && crossAccount;
+        const target = asCopy ? copyByFolderId : moveByFolderId;
+        const list = target.get(node.id) ?? [];
         list.push(id);
-        byFolderId.set(node.id, list);
+        target.set(node.id, list);
         // Only messages with a Message-ID can be reliably located for undo.
         if (item.summary.headerMessageId) {
           const undoList = undoByFolderId.get(node.id) ?? [];
           undoList.push({
             headerMessageId: item.summary.headerMessageId,
             destFolderId: node.id,
+            kind: asCopy ? "copy" : "move",
           });
           undoByFolderId.set(node.id, undoList);
         }
       }
 
-      const outcomes = await this.deps.moveMessages(byFolderId);
+      // Run the two passes sequentially, not concurrently: both read from the
+      // same source folder, and overlapping operations on it are what trigger
+      // the "folder busy" aborts the chunked, one-at-a-time strategy avoids.
+      const moveOutcomes = await this.deps.moveMessages(moveByFolderId);
+      const copyOutcomes = await this.deps.copyMessages(copyByFolderId);
+      const outcomes = [...moveOutcomes, ...copyOutcomes];
       const failed = outcomes.filter((o) => o.error);
       const notes: string[] = [];
       if (failed.length) {
