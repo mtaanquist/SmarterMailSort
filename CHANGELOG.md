@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Large applies no longer abort after the first message.** Applying a big
+  batch of moves (thousands of messages to one folder) issued a single
+  `messages.move()` call, which Thunderbird's copy service aborts partway
+  through with `onStopCopy` status `2153054241` (`0x80550021`) — only the first
+  message moved and the rest failed. Moves are now split into sequential chunks
+  of 100 with a short bounded retry per chunk (the folder is briefly "busy"
+  between copies), so large applies complete and a transient hiccup no longer
+  fails the whole run. Undo (move-back) is chunked the same way.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added

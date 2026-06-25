@@ -57,17 +57,58 @@ describe("moveBatched", () => {
     ]);
   });
 
-  it("captures errors per folder", async () => {
-    mock.messages.move.mockRejectedValueOnce(new Error("locked"));
-    const results = await moveBatched(new Map([["folderA", [1]]]));
+  it("captures errors per folder after exhausting retries", async () => {
+    mock.messages.move.mockRejectedValue(new Error("locked"));
+    const results = await moveBatched(new Map([["folderA", [1]]]), {
+      retryDelayMs: 0,
+    });
     expect(results[0].error).toBe("locked");
     expect(results[0].moved).toBe(0);
+    // One initial attempt plus the default three retries.
+    expect(mock.messages.move).toHaveBeenCalledTimes(4);
   });
 
   it("skips empty groups", async () => {
     const results = await moveBatched(new Map([["folderA", []]]));
     expect(results).toEqual([]);
     expect(mock.messages.move).not.toHaveBeenCalled();
+  });
+
+  it("splits a large group into sequential chunks", async () => {
+    const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+    const results = await moveBatched(new Map([["folderA", ids]]), {
+      chunkSize: 100,
+    });
+    expect(results).toEqual([{ folderId: "folderA", moved: 250 }]);
+    expect(mock.messages.move).toHaveBeenCalledTimes(3);
+    expect(mock.messages.move.mock.calls[0][0]).toHaveLength(100);
+    expect(mock.messages.move.mock.calls[1][0]).toHaveLength(100);
+    expect(mock.messages.move.mock.calls[2][0]).toHaveLength(50);
+  });
+
+  it("retries a chunk that aborts and then succeeds", async () => {
+    mock.messages.move
+      .mockRejectedValueOnce(new Error("Aborted with status: 2153054241"))
+      .mockResolvedValue(undefined);
+    const results = await moveBatched(new Map([["folderA", [1, 2]]]), {
+      retryDelayMs: 0,
+    });
+    expect(results).toEqual([{ folderId: "folderA", moved: 2 }]);
+    expect(mock.messages.move).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports messages already moved before a chunk failed", async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => i + 1);
+    // First chunk succeeds, the second fails every attempt.
+    mock.messages.move
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("locked"));
+    const results = await moveBatched(new Map([["folderA", ids]]), {
+      chunkSize: 100,
+      retryDelayMs: 0,
+    });
+    expect(results[0].moved).toBe(100);
+    expect(results[0].error).toBe("locked");
   });
 });
 
@@ -146,11 +187,14 @@ describe("moveBackByHeaderId", () => {
 
   it("records a failure when the move back throws", async () => {
     mock.messages.query.mockResolvedValue({ id: null, messages: [{ id: 99 }] });
-    mock.messages.move.mockRejectedValueOnce(new Error("locked"));
-    const outcome = await moveBackByHeaderId({
-      sourceFolderId: "src",
-      items: [{ headerMessageId: "<m1>", destFolderId: "fA" }],
-    });
+    mock.messages.move.mockRejectedValue(new Error("locked"));
+    const outcome = await moveBackByHeaderId(
+      {
+        sourceFolderId: "src",
+        items: [{ headerMessageId: "<m1>", destFolderId: "fA" }],
+      },
+      { retryDelayMs: 0 },
+    );
     expect(outcome.restored).toBe(0);
     expect(outcome.failures[0].error).toBe("locked");
   });

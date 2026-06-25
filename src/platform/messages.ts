@@ -19,6 +19,66 @@ type MessageList = {
   messages: RawHeader[];
 };
 
+/** Cast helper for the folder-id argument of `messenger.messages.move`. */
+type MoveFolderArg = Parameters<typeof messenger.messages.move>[1];
+
+/**
+ * Tuning for chunked moves. A single `messages.move()` of thousands of ids
+ * aborts partway through with a MailNews copy error (e.g. `onStopCopy` status
+ * `2153054241` / `0x80550021`): the underlying copy service can only carry a
+ * limited batch, and the folder is briefly "busy" between copies. So we move in
+ * modest chunks, sequentially, and retry a chunk a few times before giving up.
+ */
+const MOVE_CHUNK_SIZE = 100;
+const MOVE_CHUNK_RETRIES = 3;
+const MOVE_RETRY_DELAY_MS = 500;
+
+export interface MoveOptions {
+  chunkSize?: number;
+  retries?: number;
+  /** Base back-off between retries (multiplied by the attempt number). */
+  retryDelayMs?: number;
+}
+
+const sleep = (ms: number): Promise<void> =>
+  ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+
+/**
+ * Move `ids` into `folderId` in sequential chunks, retrying a chunk that fails
+ * with a transient copy/aborted error before giving up. Returns how many were
+ * moved and, if it stopped early, the error from the chunk that failed. Stops at
+ * the first chunk that exhausts its retries so we don't keep hammering a folder
+ * that is genuinely failing; the already-moved messages stay moved.
+ */
+async function moveInChunks(
+  ids: number[],
+  folderId: string,
+  opts: MoveOptions = {},
+): Promise<{ moved: number; error?: string }> {
+  const chunkSize = opts.chunkSize ?? MOVE_CHUNK_SIZE;
+  const retries = opts.retries ?? MOVE_CHUNK_RETRIES;
+  const retryDelayMs = opts.retryDelayMs ?? MOVE_RETRY_DELAY_MS;
+
+  let moved = 0;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        await messenger.messages.move(chunk, folderId as unknown as MoveFolderArg);
+        lastError = undefined;
+        break;
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < retries) await sleep(retryDelayMs * (attempt + 1));
+      }
+    }
+    if (lastError) return { moved, error: lastError.message };
+    moved += chunk.length;
+  }
+  return { moved };
+}
+
 /**
  * Lazily yield every message header in a folder, paging through the list with
  * continueList so even folders with tens of thousands of messages stream
@@ -128,6 +188,7 @@ export async function resolveCurrentIds(
  */
 export async function moveBackByHeaderId(
   record: UndoRecord,
+  opts: MoveOptions = {},
 ): Promise<UndoOutcome> {
   // Group by destination folder so each folder's restorable ids move in one call.
   const byDest = new Map<string, string[]>();
@@ -159,22 +220,14 @@ export async function moveBackByHeaderId(
       }
     }
     if (!ids.length) continue;
-    try {
-      await messenger.messages.move(
-        ids,
-        record.sourceFolderId as unknown as Parameters<
-          typeof messenger.messages.move
-        >[1],
-      );
-      outcome.restored += ids.length;
-    } catch (err) {
-      // The whole folder's move-back failed; attribute it to those messages.
+    // Chunk the move-back the same way as the forward move (see moveInChunks):
+    // a single large move aborts on big folders.
+    const { moved, error } = await moveInChunks(ids, record.sourceFolderId, opts);
+    outcome.restored += moved;
+    if (error) {
+      // The move-back stopped early; attribute the failure to those messages.
       for (const headerMessageId of headerMessageIds) {
-        outcome.failures.push({
-          headerMessageId,
-          destFolderId,
-          error: (err as Error).message,
-        });
+        outcome.failures.push({ headerMessageId, destFolderId, error });
       }
     }
   }
@@ -187,19 +240,13 @@ export async function moveBackByHeaderId(
  */
 export async function moveBatched(
   movesByFolderId: Map<string, number[]>,
+  opts: MoveOptions = {},
 ): Promise<Array<{ folderId: string; moved: number; error?: string }>> {
   const results: Array<{ folderId: string; moved: number; error?: string }> = [];
   for (const [folderId, ids] of movesByFolderId) {
     if (!ids.length) continue;
-    try {
-      await messenger.messages.move(
-        ids,
-        folderId as unknown as Parameters<typeof messenger.messages.move>[1],
-      );
-      results.push({ folderId, moved: ids.length });
-    } catch (err) {
-      results.push({ folderId, moved: 0, error: (err as Error).message });
-    }
+    const { moved, error } = await moveInChunks(ids, folderId, opts);
+    results.push(error ? { folderId, moved, error } : { folderId, moved });
   }
   return results;
 }
